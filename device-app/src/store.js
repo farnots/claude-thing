@@ -17,6 +17,7 @@ var state = {
   // questions[0] for the card's summary line.
   asks: [],
   usage: null,          // latest claude.usage.update payload
+  usageCol: 0,          // usage screen: leftmost account column on screen
   daemonConnected: true,
   selectedIndex: 0,     // session grid cursor
   queueIndex: 0,        // queue list cursor

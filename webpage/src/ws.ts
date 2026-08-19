@@ -66,6 +66,12 @@ export async function getStatus() {
   return r.json();
 }
 
+export async function getApi(path: string) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function postApi(path: string, body?: unknown) {
   const r = await fetch(path, {
     method: 'POST',

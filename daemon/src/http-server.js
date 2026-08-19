@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { HOST, PORT, WEBPAGE_DIST, DAEMON_VERSION, DAEMON_ROOT } from './config.js';
+import { detectAccounts, mergeDetected, normalizeAccounts, saveAccounts } from './usage-accounts.js';
 import { log } from './log.js';
 import { readSettings, setClockFormat, resolveClock24 } from './settings.js';
 
@@ -33,7 +34,7 @@ function statusSettings() {
   return { clockFormat: settings.clockFormat, clock24: resolveClock24(settings) };
 }
 
-export function createHttpServer({ hub, store, permissionBridge, sources }) {
+export function createHttpServer({ hub, store, permissionBridge, sources, usage }) {
   const server = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0];
     if (req.method === 'POST') log('IN', `${req.method} ${req.url}`);
@@ -88,6 +89,56 @@ export function createHttpServer({ hub, store, permissionBridge, sources }) {
       return res.end(JSON.stringify({ ok: true, settings: statusSettings() }));
     }
 
+    // Which Claude accounts the usage screen measures. The declaration is a
+    // plain list, so this is a read and a whole-list write rather than a CRUD
+    // surface — there is nothing to reconcile per entry.
+    if (url === '/api/usage/accounts') {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ accounts: usage.accounts() }));
+      }
+      if (req.method === 'POST') {
+        let list;
+        try {
+          const body = JSON.parse((await readBody(req)) || '{}');
+          if (!Array.isArray(body.accounts) || !body.accounts.length) {
+            throw new Error('accounts must be a non-empty array');
+          }
+          // Normalizing first means a request that would leave nothing usable is
+          // rejected here rather than silently falling back to the default
+          // account, which would look like the save had worked.
+          list = normalizeAccounts(body.accounts);
+          const ids = new Set(list.map((a) => a.id));
+          if (ids.size !== body.accounts.length) {
+            throw new Error('every account needs a distinct, usable id');
+          }
+          if (!list.some((a) => a.enabled)) throw new Error('at least one account must be enabled');
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: String(err.message || err) }));
+        }
+        saveAccounts(list, Date.now());
+        // Re-read rather than hand the poller the list we just built: reload is
+        // the one path that also re-stages the readings and the poll schedule.
+        usage.reload();
+        log('US', `accounts saved: ${list.map((a) => a.id).join(', ')}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, accounts: usage.accounts() }));
+      }
+    }
+
+    // Rescan the home directory for accounts that were not there when the
+    // declaration was first written — a second `claude login` into a new config
+    // dir. Merged, never replaced: a renamed label and a disabled account are
+    // decisions a rescan has no business undoing.
+    if (req.method === 'POST' && url === '/api/usage/accounts/redetect') {
+      const merged = mergeDetected(usage.accounts(), detectAccounts());
+      saveAccounts(merged, Date.now());
+      usage.reload();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, accounts: usage.accounts() }));
+    }
+
     if (url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
@@ -99,6 +150,9 @@ export function createHttpServer({ hub, store, permissionBridge, sources }) {
         sources: sources.status(),
         hooks: sources.hooksInstalled(),
         settings: statusSettings(),
+        // The first thing to check when the usage screen shows the wrong figures,
+        // or one column instead of two.
+        usageAccounts: usage.accounts(),
       }));
     }
 

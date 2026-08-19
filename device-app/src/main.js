@@ -6,7 +6,7 @@ import { renderList } from './screens/session-list.js';
 import { renderDetail } from './screens/session-detail.js';
 import { renderQueue } from './screens/queue.js';
 import { renderAsk, setQueueContext } from './screens/ask.js';
-import { renderUsage } from './screens/usage.js';
+import { renderUsage, USAGE_COLS } from './screens/usage.js';
 import { renderAmbient } from './screens/ambient.js';
 import * as mascot from './mascot.js';
 import { renderBluetooth, btMenuActions, renderBtPairing } from './screens/bluetooth.js';
@@ -354,6 +354,14 @@ onAction('dial', function (dir) {
     } else {
       store.update({ btIndex: Math.max(0, Math.min(state.btDevices.length, state.btIndex + dir)) });
     }
+  } else if (r.name === 'usage') {
+    // Two accounts fill the screen, so there is nothing to scroll until there
+    // is a third. Paging by a whole screen rather than one column keeps a
+    // column from being half-visible.
+    var accounts = ((state.usage && state.usage.accounts) || []).length;
+    if (accounts <= USAGE_COLS) return;
+    var last = accounts - USAGE_COLS;
+    store.update({ usageCol: Math.max(0, Math.min(last, state.usageCol + dir * USAGE_COLS)) });
   } else if (r.name === 'ambient') {
     nav('#/list');
   }
@@ -426,7 +434,9 @@ onAction('back', function () {
 
 onAction('page-sessions', function () { nav('#/list'); });
 onAction('page-queue', function () { nav('#/queue'); });
-onAction('page-usage', function () { nav('#/usage'); });
+// Back to the first page of accounts: pressing the button again is how you get
+// out of a scrolled position, the same way the sessions grid behaves.
+onAction('page-usage', function () { store.update({ usageCol: 0 }); nav('#/usage'); });
 
 // Preset 4 denies whatever is in front of you — the prompt screen's ask, or
 // the queue's hero.
@@ -1053,7 +1063,7 @@ ws.onOpen(function () {
   syncQueue(true);
   scheduleWatch(true);
 
-  ws.request('claude.usage.get', { slim: 1 }).then(function (u) {
+  ws.request('claude.usage.get', { slim: 1, accounts: 1 }).then(function (u) {
     store.update({ usage: u });
   }).catch(function () {});
 });
@@ -1069,7 +1079,7 @@ setInterval(function () {
   ws.request('claude.sessions.list', { limit: BOOT_SESSION_LIMIT }).then(function (snap) {
     store.applySnapshot(snap);
     daemonAlive();
-    ws.request('claude.usage.get', { slim: 1 }).then(function (u) {
+    ws.request('claude.usage.get', { slim: 1, accounts: 1 }).then(function (u) {
       store.update({ usage: u });
     }).catch(function () {});
   }).catch(function () {});

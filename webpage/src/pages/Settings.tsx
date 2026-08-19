@@ -1,7 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Card, PageHeader, StatusRow } from '../components/ui';
 import { useStatus, type ClockFormat } from '../hooks';
-import { postApi } from '../ws';
+import { getApi, postApi } from '../ws';
+
+type Account = {
+  id: string;
+  label: string;
+  configDir: string | null;
+  enabled: boolean;
+  missing?: boolean;
+  failKind?: string | null;
+  failStreak?: number;
+  nextPollMs?: number;
+};
 
 const CLOCK_CHOICES: { value: ClockFormat; label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -48,6 +59,8 @@ export function Settings() {
   return (
     <div>
       <PageHeader title="Settings" subtitle="Claude Code integration and daemon configuration." />
+
+      <ClaudeAccounts />
 
       <Card className="mb-4">
         <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Device</div>
@@ -101,5 +114,126 @@ export function Settings() {
           hint="keeps a snapshot under the Bluetooth chunk budget" />
       </Card>
     </div>
+  );
+}
+
+// Which Claude accounts the usage screen measures. An account is a
+// CLAUDE_CONFIG_DIR, or the absence of one — those are different things, and the
+// blank field below means the absence, not ~/.claude.
+function ClaudeAccounts() {
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  async function load() {
+    try {
+      const out = await getApi('/api/usage/accounts');
+      setAccounts(out.accounts);
+      setDirty(false);
+    } catch (e) {
+      setMsg(`could not read accounts: ${(e as Error).message}`);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  function edit(i: number, patch: Partial<Account>) {
+    setAccounts((prev) => prev && prev.map((a, n) => (n === i ? { ...a, ...patch } : a)));
+    setDirty(true);
+    setMsg(null);
+  }
+
+  async function save() {
+    if (!accounts) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const out = await postApi('/api/usage/accounts', {
+        accounts: accounts.map(({ id, label, configDir, enabled }) => ({ id, label, configDir, enabled })),
+      });
+      setAccounts(out.accounts);
+      setDirty(false);
+      setMsg('saved — the next reading uses these');
+    } catch (e) {
+      setMsg(`not saved: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function redetect() {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const out = await postApi('/api/usage/accounts/redetect');
+      setAccounts(out.accounts);
+      setDirty(false);
+      setMsg('rescanned — labels and disabled accounts were left alone');
+    } catch (e) {
+      setMsg(`rescan failed: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const enabled = (accounts || []).filter((a) => a.enabled).length;
+
+  return (
+    <Card className="mb-4">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Claude accounts</div>
+      <p className="mb-4 text-xs text-muted">
+        One usage column per account on the device. An account is a CLAUDE_CONFIG_DIR — leave it blank for the
+        machine default, which is not the same thing as <code className="font-mono">~/.claude</code>. Detected once
+        on first run; edits here stick.
+      </p>
+
+      {!accounts && <div className="text-sm text-muted">reading…</div>}
+
+      {accounts && accounts.map((a, i) => (
+        <div key={a.id} className="flex items-center gap-3 border-b border-line py-3 last:border-0">
+          <input
+            className="w-28 rounded-lg border border-line bg-hover px-2 py-1 font-mono text-sm uppercase text-fg"
+            value={a.label}
+            maxLength={12}
+            onChange={(e) => edit(i, { label: e.target.value.toUpperCase().slice(0, 12) })}
+            aria-label={`label for ${a.id}`}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-mono text-xs text-secondary">
+              {a.configDir || 'default — no CLAUDE_CONFIG_DIR'}
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted">
+              id <span className="font-mono">{a.id}</span>
+              {a.missing && <span className="text-warn"> · config dir not found, so it is not polled</span>}
+              {!a.missing && a.failKind && (
+                <span className="text-warn">
+                  {' '}· last poll failed ({a.failKind})
+                  {a.nextPollMs && a.nextPollMs > 60_000
+                    ? `, backed off to every ${Math.round(a.nextPollMs / 60_000)} min`
+                    : ''}
+                </span>
+              )}
+            </div>
+          </div>
+          <Button
+            variant={a.enabled ? 'outline' : 'default'}
+            onClick={() => edit(i, { enabled: !a.enabled })}
+          >
+            {a.enabled ? 'on' : 'off'}
+          </Button>
+        </div>
+      ))}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Button onClick={save} disabled={busy || !dirty || !accounts || enabled === 0}>Save</Button>
+        <Button variant="outline" onClick={redetect} disabled={busy}>Re-detect</Button>
+        {dirty && enabled === 0 && (
+          <span className="text-xs text-warn">at least one account has to stay on</span>
+        )}
+      </div>
+
+      {msg && <p className="mt-3 font-mono text-xs text-secondary">{msg}</p>}
+    </Card>
   );
 }

@@ -145,14 +145,30 @@ back. It sticks across reboots.
 |---|---|
 | **Preset 1** | **Sessions** — a scrolling grid of every session. Each tile shows its state, its model, what it's doing, how full its context window is, and an animated Claude mascot acting it out. Pressing a tile raises that session's terminal window on your Mac. |
 | **Preset 2** | **Queue** — everything waiting on a human. The one you'd answer next fills the screen and can be allowed or denied right there; the rest stack underneath. |
-| **Preset 3** | **Usage** — your real session and weekly limits, with reset times. |
+| **Preset 3** | **Usage** — your real session and weekly limits, with reset times. Two Claude accounts on the Mac get a column each; turn the dial past two. |
 | **Preset 4** | Denies the permission on screen. |
 | **Dial** | Turn to move, press to open or confirm. |
 | **Back** | Up a level; on a prompt, hands it back to the terminal. |
 | **M** | Ambient clock. Tap the screen to hide or bring back the wandering sprite. |
 | **Touch** | Everything on screen is tappable. |
 
-Two things worth knowing:
+Three things worth knowing:
+
+**Two Claude accounts, two columns.** If you sign in to more than one Claude
+account on the same Mac — say a personal one and a work one, kept apart with
+`CLAUDE_CONFIG_DIR` — the usage screen draws one column per account, each with
+its own bars, its own reset times and its own reading time. They're found
+automatically the first time the daemon runs, and you can rename them, switch one
+off or rescan from **Settings** on the control page at <http://127.0.0.1:8790>.
+Nothing to configure if you only have one account: the screen looks exactly as it
+always did.
+
+Two details that surprise people. The account with no `CLAUDE_CONFIG_DIR` set is
+its own account, and it is *not* the same as pointing at `~/.claude` — Claude Code
+reads `~/.claude.json` in that case, and forcing the variable can land on an empty
+config instead. And an account that's signed out or whose config directory has
+moved shows the reason in its own column; the other column keeps reporting
+normally, and the broken one stops being retried every minute.
 
 **Permissions are answered for real; questions are typed.** Allow/deny from the
 dial is the actual decision — the daemon holds Claude Code's permission hook open

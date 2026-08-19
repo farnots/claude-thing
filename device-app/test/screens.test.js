@@ -21,7 +21,7 @@ function baseState(over = {}) {
     queueAnswering: false, queueChoice: 0,
     queueQIndex: 0, queueAnswers: [], queueReview: false, queueFromReview: false,
     btDevices: [], btDiscoverable: false, btIndex: 0, btMenu: null,
-    btMenuIndex: 0, btBusy: null, btPairing: null, ...over,
+    btMenuIndex: 0, btBusy: null, btPairing: null, usageCol: 0, ...over,
   };
 }
 const btDevice = (over = {}) => ({
@@ -856,4 +856,134 @@ test('a daemon-sent destructive flag outranks the regex either way', () => {
 test('no flag falls back to the regex over the summary', () => {
   assert.ok(isDestructive(permAsk({ summary: 'git reset --hard HEAD~1' })));
   assert.ok(!isDestructive(permAsk({ summary: 'git status' })));
+});
+
+// ---- usage, more than one Claude account -------------------------------------
+
+const account = (id, over = {}) => ({
+  id,
+  label: id.toUpperCase(),
+  updatedLabel: 'updated 15:42 · from claude /usage',
+  limits: [{ key: 'session', label: 'SESSION', used: 0.47, detail: 'resets Aug 19 at 8pm' }],
+  windows: [{ window: 'Last 24h', requests: 1234, sessions: 12 }],
+  ...over,
+});
+
+test('two accounts draw two columns, each with its own name and reading time', () => {
+  const html = renderUsage(baseState({
+    usage: {
+      accountId: 'lucas', accountCount: 2,
+      accounts: [
+        account('lucas', { updatedLabel: 'updated 15:42 · from claude /usage' }),
+        account('polycea', {
+          updatedLabel: 'updated 15:12 · from claude /usage',
+          limits: [{ key: 'session', label: 'SESSION', used: 0.04, detail: 'resets Aug 19 at 7:10pm' }],
+          windows: [{ window: 'Last 24h', requests: 82, sessions: 3 }],
+        }),
+      ],
+    },
+  }));
+  assert.equal(html.match(/class="ucol"/g).length, 2);
+  assert.match(html, /LUCAS/);
+  assert.match(html, /POLYCEA/);
+  assert.match(html, /width:47\.0%/);
+  assert.match(html, /width:4\.0%/);
+  // Polled 30s apart, so the timestamps genuinely differ and belong per column.
+  assert.match(html, /15:42/);
+  assert.match(html, /15:12/);
+  assert.match(html, /resets Aug 19 at 7:10pm/, 'reset times survive the narrower layout');
+  // The mood phrase does not fit a column, and the tables are not even sent.
+  assert.doesNotMatch(html, /ALL CLEAR/);
+  assert.doesNotMatch(html, /SUBAGENTS/);
+  assert.match(html, /usprite mood-clear/, 'but each bar keeps its own mascot');
+});
+
+test('a broken account loses its own column, not the other one', () => {
+  const html = renderUsage(baseState({
+    usage: {
+      accountId: 'polycea', accountCount: 2,
+      accounts: [
+        { id: 'lucas', label: 'LUCAS', limits: [], error: 'config dir missing: /Users/x/.claude-gone' },
+        account('polycea'),
+      ],
+    },
+  }));
+  assert.match(html, /config dir missing/);
+  assert.match(html, /POLYCEA/);
+  assert.match(html, /width:47\.0%/, "the working account still draws its bars");
+  assert.equal(html.match(/class="ucol"/g).length, 2, 'and the broken one keeps its place');
+});
+
+test('an account with figures and a failing poll shows both', () => {
+  const html = renderUsage(baseState({
+    usage: {
+      accountId: 'lucas', accountCount: 2,
+      accounts: [
+        account('lucas', { stale: true, error: 'claude /usage failed: timed out after 45s' }),
+        account('polycea'),
+      ],
+    },
+  }));
+  assert.match(html, /width:47\.0%/, 'the last good reading is still worth drawing');
+  assert.match(html, /timed out after 45s/, 'and so is the reason it is not current');
+  assert.match(html, /STALE/);
+});
+
+test('a third account is paged, and only then is the hint drawn', () => {
+  const three = {
+    accountId: 'a', accountCount: 3,
+    accounts: [account('a'), account('b'), account('c')],
+  };
+  const first = renderUsage(baseState({ usage: three }));
+  assert.match(first, /1–2 \/ 3 · turn dial for more/);
+  assert.match(first, /\bA\b/);
+  assert.doesNotMatch(first, />C</, 'the third account is off-screen until the dial moves');
+
+  const scrolled = renderUsage(baseState({ usage: three, usageCol: 1 }));
+  assert.match(scrolled, /2–3 \/ 3/);
+  assert.match(scrolled, />C</);
+
+  // Two accounts fill the screen, so nothing is ever off it.
+  const two = renderUsage(baseState({
+    usage: { accountId: 'a', accountCount: 2, accounts: [account('a'), account('b')] },
+  }));
+  assert.doesNotMatch(two, /turn dial for more/);
+});
+
+test('one account keeps the full-width layout, tables and all', () => {
+  // The single-account case must not regress into a one-column version of the
+  // two-column screen: the mood phrase and the contributing tables stay.
+  const html = renderUsage(baseState({
+    usage: {
+      accountId: 'lucas', accountCount: 1,
+      accounts: [account('lucas', {
+        windows: [{
+          window: 'Last 24h', requests: 1234, sessions: 12,
+          skills: [{ name: '/deploy-to-dev', pct: '1%' }],
+          subagents: [{ name: 'Explore', pct: '7%' }],
+        }],
+      })],
+    },
+  }));
+  assert.doesNotMatch(html, /class="ucol"/);
+  assert.match(html, /ALL CLEAR/);
+  assert.match(html, /SKILLS/);
+  assert.match(html, /\/deploy-to-dev/);
+  assert.match(html, /Last 24h · 1234 requests · 12 sessions/);
+});
+
+test('a daemon that predates accounts still renders', () => {
+  // The flat shape, with no accounts array at all. This is what a Mac running an
+  // older daemon sends, and the screen must not care.
+  const html = renderUsage(baseState({
+    usage: {
+      updatedLabel: 'updated 01:46 · from claude /usage',
+      limits: [{ key: 'session', label: 'SESSION', used: 0.11, detail: 'resets Jul 30 at 5:19am' }],
+      windows: [{ window: 'Last 24h', requests: 579, sessions: 8, skills: [], subagents: [] }],
+    },
+  }));
+  assert.doesNotMatch(html, /class="ucol"/);
+  assert.match(html, /SESSION/);
+  assert.match(html, /width:11\.0%/);
+  assert.match(html, /updated 01:46/);
 });

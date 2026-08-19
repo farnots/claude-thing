@@ -91,3 +91,24 @@ export const MOCK_SESSIONS = process.env.CLAUDE_THING_MOCK === '1';
 
 // Usage screen: real plan figures read from `claude -p "/usage"` once a minute.
 export const USAGE_REFRESH_MS = 60_000;
+// One `claude` boot per account per refresh, so the declared set is bounded
+// rather than trusted: four accounts already means a poll starting every 15s,
+// and each one rewrites the session registry the poller reads (see
+// RETIRE_AFTER_MISSED_POLLS above). Declaring more is a mistake, not a request.
+export const MAX_USAGE_ACCOUNTS = 4;
+// How many accounts a *synchronous* claude.usage.get response may carry to a
+// relay role. Same constraint as BT_SAFE_SESSION_LIMIT and measured the same
+// way (chunk-fit.test.js, worst-case reading with a 120-char error): 1 account
+// is 791 bytes, 2 is 1449, 3 is 2107 — so 2 is the largest that fits the 1800
+// budget, and chunk-fit asserts both halves of that so the constant cannot
+// drift away from the measurement. Accounts past the cap arrive on the
+// follow-up claude.usage.update push, which chunks.
+export const BT_SAFE_USAGE_ACCOUNTS = 2;
+// A missing config file or a signed-out account fails every single time, and
+// retrying it once a minute spends a 45s `claude` boot on a foregone
+// conclusion — and pollutes the session registry doing it. After this many
+// consecutive structural failures that account backs off to
+// USAGE_ERROR_BACKOFF_MS; one good reading puts it straight back on the
+// nominal interval. Transient failures (timeouts) never back off.
+export const USAGE_BACKOFF_AFTER = 3;
+export const USAGE_ERROR_BACKOFF_MS = 15 * 60_000;

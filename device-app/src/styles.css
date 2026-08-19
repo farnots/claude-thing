@@ -1316,6 +1316,108 @@ html, body {
   text-overflow: ellipsis;
 }
 
+/* ---- usage columns -------------------------------------------------------
+   Two or more Claude accounts: one column per account, side by side. Reuses the
+   bar, track, fill and sprite of the full-width layout untouched — only the
+   chrome around them narrows, so a bar reads the same in either mode. */
+.ucols {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 10px 16px 0 16px;
+}
+.ucol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The divider between columns, and the only thing separating them. */
+.ucol + .ucol {
+  margin-left: 20px;
+  padding-left: 20px;
+  border-left: 1px solid var(--rule);
+}
+.ucolhead {
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.ucolname {
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.14em;
+  color: var(--bone);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Each account is polled on its own schedule — 30s apart at two accounts — so
+   the reading times genuinely differ and the timestamp belongs per column, not
+   in a shared footer. */
+.ucolts {
+  margin-left: auto;
+  padding-left: 10px;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 15px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.ucolbars { flex-shrink: 0; }
+.ubar.ucompact { margin-bottom: 14px; }
+/* No mood phrase: 96px of it does not fit a ~368px column, and the sprite and
+   fill colour already carry the same verdict. */
+.ucompact .ulabel { font-size: 18px; }
+.ucompact .upct { font-size: 26px; }
+.ucompact .usprite { margin-left: 14px; }
+/* The reset clause moves under the track rather than sharing the header line,
+   where the label and the percentage already use the width. */
+.ucolreset {
+  margin-left: 0;
+  margin-top: 5px;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Held open even when a limit has no reset clause — `Current week (Fable): 0%
+     used` prints without one. Letting it collapse pushes that column's divider
+     and window line up by a row, and two columns meant to be read against each
+     other stop lining up. */
+  min-height: 20px;
+}
+.ucolfoot {
+  flex: 1;
+  min-height: 0;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+.ucolfoot .uwin { font-size: 15px; }
+/* An account can have figures and an error at once — the last good reading plus
+   a note that the newest poll failed — so this sits below the bars rather than
+   replacing them. Wraps, because the reason is worth reading. */
+.ucolerr {
+  margin-top: 8px;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--danger);
+  overflow: hidden;
+}
+/* Only drawn past two accounts, when a column is genuinely off-screen. Same
+   wording as the bluetooth list's overflow line. */
+.umore {
+  flex-shrink: 0;
+  padding: 2px 16px 0 16px;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 15px;
+  color: var(--faint);
+  text-align: center;
+}
+
 /* ---- session detail ----------------------------------------------------- */
 .detail {
   flex: 1;
