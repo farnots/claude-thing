@@ -5,7 +5,9 @@ import { execFileSync } from 'node:child_process';
 import { HOST, PORT, WEBPAGE_DIST, DAEMON_VERSION, DAEMON_ROOT } from './config.js';
 import { detectAccounts, mergeDetected, normalizeAccounts, saveAccounts } from './usage-accounts.js';
 import { log } from './log.js';
-import { readSettings, setClockFormat, resolveClock24 } from './settings.js';
+import {
+  readSettings, setClockFormat, setLanguage, resolveClock24, resolveLang,
+} from './settings.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -27,12 +29,24 @@ function readBody(req) {
   });
 }
 
-// What the Settings page needs: the stored choice plus what "auto" currently
-// resolves to, so the page can say which format auto is giving today.
+// What the Settings page needs: the stored choices plus what "auto" currently
+// resolves to for each, so the page can say which format and which language auto
+// is giving today.
 function statusSettings() {
   const settings = readSettings();
-  return { clockFormat: settings.clockFormat, clock24: resolveClock24(settings) };
+  return {
+    clockFormat: settings.clockFormat,
+    clock24: resolveClock24(settings),
+    language: settings.language,
+    lang: resolveLang(settings),
+  };
 }
+
+// One writer per setting, keyed by the field the page posts. A patch applies
+// only the keys it carries, so the page can send one without restating the
+// other — and an unknown value is named in the 400 rather than reported as a
+// generic failure.
+const WRITERS = { clockFormat: setClockFormat, language: setLanguage };
 
 export function createHttpServer({ hub, store, permissionBridge, sources, usage }) {
   const server = http.createServer(async (req, res) => {
@@ -73,17 +87,32 @@ export function createHttpServer({ hub, store, permissionBridge, sources, usage 
       }
     }
 
-    // Clock format from the webpage's Settings page. Pushing a snapshot right
+    // Device settings from the webpage's Settings page. Pushing a snapshot right
     // after the write is what makes the device flip in a frame instead of
     // waiting out the heartbeat — same move as the sessions.list handler.
     if (req.method === 'POST' && url === '/api/settings') {
       let payload = {};
       try { payload = JSON.parse(await readBody(req) || '{}'); } catch {}
-      const settings = setClockFormat(payload.clockFormat);
-      if (!settings) {
+
+      const keys = Object.keys(WRITERS).filter((k) => k in payload);
+      if (!keys.length) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ ok: false, error: 'unknown clockFormat' }));
+        return res.end(JSON.stringify({ ok: false, error: 'no known setting in the body' }));
       }
+      for (const key of keys) {
+        if (!WRITERS[key](payload[key])) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: false, error: `unknown ${key}` }));
+        }
+      }
+
+      // The usage screen's labels are built at poll time, not at emit time, so a
+      // language change alone would leave them in the old language for up to the
+      // refresh window. Re-poll rather than wait it out; nothing else on the
+      // device needs it, because everything else is drawn from the snapshot this
+      // line pushes.
+      if (keys.includes('language')) Promise.resolve(usage.refresh()).catch(() => {});
+
       hub.emit('claude.sessions.update', store.snapshot());
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, settings: statusSettings() }));

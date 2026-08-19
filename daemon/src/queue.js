@@ -30,6 +30,7 @@
 
 import crypto from 'node:crypto';
 import { log } from './log.js';
+import { t } from './i18n.js';
 
 // Overridable so tests can watch an ask time out without waiting ten minutes.
 const QUESTION_TTL_MS = Number(process.env.CLAUDE_THING_QUESTION_TTL_MS ?? 10 * 60_000);
@@ -218,17 +219,21 @@ export function matchOptionIndex(rows, label) {
 // "clear context and use auto mode" is a clear-context row first and foremost,
 // and the device must say so — it is the one choice that costs the conversation.
 // A row we do not recognize gets no description rather than an invented one.
+//
+// The regexes match the CLI's own English rows and stay English whatever the
+// user's language is — they read a screen, they are not shown to anyone. Only
+// the note attached to each is ours to translate.
 const PLAN_NOTES = [
-  [/clear context/i, 'approve the plan AND clear the conversation context'],
-  [/bypass permissions/i, 'approve the plan and run without permission prompts'],
-  [/auto mode/i, 'approve the plan and let Claude edit and run without asking'],
-  [/auto-accept edits/i, 'approve the plan and accept its edits without asking'],
-  [/manually approve/i, 'approve the plan and confirm each edit'],
+  [/clear context/i, 'plan.clearContext'],
+  [/bypass permissions/i, 'plan.bypass'],
+  [/auto mode/i, 'plan.auto'],
+  [/auto-accept edits/i, 'plan.acceptEdits'],
+  [/manually approve/i, 'plan.manual'],
 ];
 
-function planNote(label) {
+function planNote(label, lang) {
   const hit = PLAN_NOTES.find(([re]) => re.test(label));
-  return hit ? hit[1] : '';
+  return hit ? t(lang, hit[1]) : '';
 }
 
 // The approve rows of a plan dialog, as the card's options. Only the leading
@@ -236,12 +241,15 @@ function planNote(label) {
 // the keyboard exactly as they did when the two options were hardcoded. They are
 // last in the dialog, so dropping them leaves the kept indices equal to the
 // on-screen ones — which is what keySequence counts Downs against.
-export function planOptionsFrom(rows) {
+export function planOptionsFrom(rows, lang = 'en') {
   const out = [];
   for (const row of rows || []) {
     if (!/^yes\b/i.test(row.label)) break;
     if (row.index !== out.length) return null;
-    out.push({ label: row.label, description: planNote(row.label) });
+    // The label is the row as the screen spells it, never translated:
+    // matchOptionIndex looks it back up on that screen before typing, so a
+    // translated label would answer nothing.
+    out.push({ label: row.label, description: planNote(row.label, lang) });
   }
   // A numbered list of "Yes…" rows is not proof the plan dialog is the one up —
   // the trust-this-folder prompt is also one. Require at least one row we can
@@ -255,10 +263,14 @@ export function planOptionsFrom(rows) {
 // The wording is the CLI's own for a session with neither bypass permissions nor
 // the auto-mode gate; the ask carries optionsUnverified so nothing downstream
 // mistakes it for something read off a screen.
-const FALLBACK_PLAN_OPTIONS = [
-  { label: 'Yes, auto-accept edits', description: 'approve the plan and accept its edits without asking' },
-  { label: 'Yes, manually approve edits', description: 'approve the plan and confirm each edit' },
-];
+// The labels are the CLI's wording and are matched against the live screen at
+// answer time, so they are English here in every language.
+function fallbackPlanOptions(lang) {
+  return [
+    { label: 'Yes, auto-accept edits', description: t(lang, 'plan.acceptEdits') },
+    { label: 'Yes, manually approve edits', description: t(lang, 'plan.manual') },
+  ];
+}
 
 // Answers arrive as number[][] — one entry per question, each the option
 // indices chosen for it. A pre-group client sending a bare optionIndex still
@@ -285,20 +297,24 @@ function normalizeAnswers(raw, questions) {
   return out;
 }
 
-function shapeQuestion(q) {
+function shapeQuestion(q, lang) {
   const options = (q.options || []).slice(0, 8).map((o) => ({
     label: String(o.label || '').slice(0, 60),
     description: String(o.description || '').slice(0, 120),
   }));
   return {
-    header: (q.header || 'QUESTION').toUpperCase(),
+    // A header the asker gave is theirs; only the fallback is ours to say.
+    header: (q.header || t(lang, 'queue.question')).toUpperCase(),
     question: String(q.question || '').slice(0, 300),
     options,
     multiSelect: !!q.multiSelect,
   };
 }
 
-export function createQueue({ emit, store, focus }) {
+// `lang` is a getter for the same reason it is one in usage.js: the user can
+// change it while the daemon runs, and injecting it keeps this module unaware
+// of where preferences live, so its tests run in English on any Mac.
+export function createQueue({ emit, store, focus, lang = () => 'en' }) {
   const questions = new Map();   // id -> ask
   const expired = new Map();     // id -> ask, timed out but still on screen
 
@@ -311,7 +327,7 @@ export function createQueue({ emit, store, focus }) {
   // when no prompt has been seen; the device then omits the line.
   function intentFor(sessionId) {
     const s = sessionId && store.raw(sessionId);
-    return s && s.lastPrompt ? `you asked: ${s.lastPrompt}` : '';
+    return s && s.lastPrompt ? t(lang(), 'permission.youAsked', { prompt: s.lastPrompt }) : '';
   }
 
   // One ask per dialog: every question the tool call carries rides on the same
@@ -325,7 +341,7 @@ export function createQueue({ emit, store, focus }) {
   function onQuestion(payload) {
     const input = payload.tool_input || {};
     const list = (Array.isArray(input.questions) ? input.questions : [])
-      .map(shapeQuestion)
+      .map((q) => shapeQuestion(q, lang()))
       .filter((q) => q.options.length);
     if (!list.length) return;
 
@@ -362,7 +378,7 @@ export function createQueue({ emit, store, focus }) {
       if (i) await sleep(PLAN_READ_GAP_MS);
       let text = null;
       try { text = await focus.capturePane(pane.id); } catch {}
-      const options = planOptionsFrom(parseDialogOptions(text));
+      const options = planOptionsFrom(parseDialogOptions(text), lang());
       if (options) return options;
     }
     log('QQ', `plan dialog not readable in pane ${pane.label || pane.id}`);
@@ -393,10 +409,11 @@ export function createQueue({ emit, store, focus }) {
       sessionName: sessionName(payload.session_id),
       intent: intentFor(payload.session_id),
       questions: [shapeQuestion({
-        header: 'PLAN',
-        question: (heading || 'Ready to code?').replace(/^#+\s*/, ''),
-        options: read || FALLBACK_PLAN_OPTIONS,
-      })],
+        header: t(lang(), 'queue.plan'),
+        // The heading is the plan's own first line; only its absence is ours.
+        question: (heading || t(lang(), 'queue.readyToCode')).replace(/^#+\s*/, ''),
+        options: read || fallbackPlanOptions(lang()),
+      }, lang())],
       createdTs,
     };
     // Guessed options are marked as such. Nothing on the device leans on it

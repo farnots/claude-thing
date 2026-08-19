@@ -7,18 +7,20 @@ import { Bluetooth as BluetoothPage } from './pages/Bluetooth';
 import { Settings } from './pages/Settings';
 import { connect } from './ws';
 import { useDaemonLink } from './hooks';
+import { LocaleProvider, useT } from './i18n';
 
 const NAV = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/bluetooth', label: 'Bluetooth', icon: Bluetooth },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
-];
+  { to: '/', key: 'nav.dashboard', icon: LayoutDashboard },
+  { to: '/bluetooth', key: 'nav.bluetooth', icon: Bluetooth },
+  { to: '/settings', key: 'nav.settings', icon: SettingsIcon },
+] as const;
 
 function Nav() {
   const loc = useLocation();
+  const t = useT();
   return (
     <nav className="flex items-center gap-1">
-      {NAV.map(({ to, label, icon: Icon }) => {
+      {NAV.map(({ to, key, icon: Icon }) => {
         const active = to === '/' ? loc.pathname === '/' : loc.pathname.startsWith(to);
         return (
           <NavLink key={to} to={to} className={clsx(
@@ -26,7 +28,7 @@ function Nav() {
             active ? 'bg-hover text-fg' : 'text-secondary hover:bg-hover hover:text-fg',
           )}>
             <Icon className="size-4" />
-            {label}
+            {t(key)}
           </NavLink>
         );
       })}
@@ -36,6 +38,7 @@ function Nav() {
 
 function Layout({ children }: { children: React.ReactNode }) {
   const linked = useDaemonLink();
+  const t = useT();
   return (
     <div className="flex min-h-screen flex-col bg-bg">
       <header className="sticky top-0 z-40 border-b border-line bg-bg/80 backdrop-blur-xl">
@@ -46,12 +49,12 @@ function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <Nav />
           <span className={clsx('size-2 rounded-full', linked ? 'bg-success' : 'bg-destructive')}
-            title={linked ? 'daemon connected' : 'daemon offline'} />
+            title={t(linked ? 'chrome.daemonConnected' : 'chrome.daemonOffline')} />
         </div>
       </header>
       <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">{children}</main>
       <footer className="border-t border-line px-6 py-4 text-center text-xs text-muted">
-        Car Thing session monitor · Nocturne extension
+        {t('chrome.footer')}
       </footer>
     </div>
   );
@@ -61,13 +64,15 @@ export default function App() {
   useEffect(() => { connect(); }, []);
   return (
     <BrowserRouter>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/bluetooth" element={<BluetoothPage />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-      </Layout>
+      <LocaleProvider>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/bluetooth" element={<BluetoothPage />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </Layout>
+      </LocaleProvider>
     </BrowserRouter>
   );
 }

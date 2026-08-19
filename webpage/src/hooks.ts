@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { getStatus, onConnection, onTopic } from './ws';
 
 export type ClockFormat = 'auto' | '12' | '24';
+// 'auto' is a rule and never a resolution: Locale is what the daemon answers.
+export type Language = 'auto' | 'en' | 'fr';
+export type Locale = 'en' | 'fr';
 
 export type Status = {
   daemonVersion: string;
@@ -14,9 +17,10 @@ export type Status = {
   };
   sources: string[];
   hooks: boolean;
-  // clock24 is what clockFormat resolves to right now — 'auto' is settled
-  // against the Mac's locale by the daemon, not here.
-  settings: { clockFormat: ClockFormat; clock24: boolean };
+  // clock24 and lang are what clockFormat and language resolve to right now —
+  // 'auto' is settled against the Mac by the daemon, not here. The device reads
+  // the same two answers off its snapshot.
+  settings: { clockFormat: ClockFormat; clock24: boolean; language: Language; lang: Locale };
 };
 
 // Polls /status and refreshes immediately on any daemon event, mirroring the

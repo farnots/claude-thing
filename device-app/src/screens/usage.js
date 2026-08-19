@@ -1,4 +1,5 @@
 import { esc, topbar, moodFor, usageReadings } from './helpers.js';
+import { t } from '../i18n.js';
 
 // The real /usage figures: plan-limit percentages with reset times, plus the
 // "what's contributing" breakdown. Each bar carries its own mascot driven by
@@ -15,7 +16,7 @@ import { esc, topbar, moodFor, usageReadings } from './helpers.js';
 export var USAGE_COLS = 2;
 
 export function renderUsage(state) {
-  var bar = topbar('USAGE', state.daemonConnected);
+  var bar = topbar(t('bar.usage'), state.daemonConnected);
   var list = usageReadings(state.usage);
   // One account keeps the full-width layout it has always had, mascot phrases
   // and contributing tables included. Nothing about that case changes.
@@ -26,7 +27,7 @@ export function renderUsage(state) {
 function single(bar, r) {
   if (!r || !r.limits || !r.limits.length) {
     return '<div class="screen">' + bar +
-      '<div class="empty">' + esc(r && r.error ? r.error : 'READING USAGE…') + '</div></div>';
+      '<div class="empty">' + esc(r && r.error ? r.error : t('usage.reading')) + '</div></div>';
   }
 
   var rows = '';
@@ -34,7 +35,7 @@ function single(bar, r) {
 
   return '<div class="screen">' + bar +
     '<div class="usage">' + rows + tables(r) + '</div>' +
-    '<div class="ufoot">' + esc(r.updatedLabel || '') + (r.stale ? ' · stale' : '') + '</div>' +
+    '<div class="ufoot">' + esc(r.updatedLabel || '') + (r.stale ? t('usage.staleSuffix') : '') + '</div>' +
     '</div>';
 }
 
@@ -66,12 +67,12 @@ function columns(bar, list, col) {
   // bluetooth list's overflow line, for the same reason.
   var more = list.length > USAGE_COLS
     ? '<div class="umore">' + (start + 1) + '–' + (start + page.length) +
-      ' / ' + list.length + ' · turn dial for more</div>'
+      ' / ' + list.length + t('common.turnDialForMore') + '</div>'
     : '';
 
   return '<div class="screen">' + bar +
     '<div class="ucols">' + cols + '</div>' + more +
-    '<div class="ufoot">from claude /usage</div>' +
+    '<div class="ufoot">' + t('usage.fromClaude') + '</div>' +
     '</div>';
 }
 
@@ -85,7 +86,7 @@ function column(r) {
   // reason to stop reporting the other.
   if (!r.limits || !r.limits.length) {
     return '<div class="ucol">' + head +
-      '<div class="ucolerr">' + esc(r.error || 'READING USAGE…') + '</div></div>';
+      '<div class="ucolerr">' + esc(r.error || t('usage.reading')) + '</div></div>';
   }
 
   var bars = '';
@@ -124,7 +125,7 @@ function narrowBar(l) {
 // has drifted.
 function stamp(r) {
   var m = /(\d{1,2}:\d{2})/.exec(String(r.updatedLabel || ''));
-  return (m ? m[1] : '') + (r.stale ? (m ? ' ' : '') + 'STALE' : '');
+  return (m ? m[1] : '') + (r.stale ? (m ? ' ' : '') + t('usage.stale') : '');
 }
 
 function windowLine(r) {
@@ -154,8 +155,8 @@ function tables(u) {
   return '<div class="ubreak">' +
     '<div class="uwin">' + win + '</div>' +
     '<div class="utables">' +
-    table('SKILLS', w.skills || []) +
-    table('SUBAGENTS', w.subagents || []) +
+    table(t('usage.skills'), w.skills || []) +
+    table(t('usage.subagents'), w.subagents || []) +
     '</div></div>';
 }
 
@@ -167,11 +168,11 @@ function table(title, rows) {
   }
   if (!body) body = '<div class="utrow"><span class="utname">—</span></div>';
   return '<div class="utable"><div class="uthead"><span class="uttitle">' + title + '</span>' +
-    '<span class="utunit">% of usage</span></div>' + body + '</div>';
+    '<span class="utunit">' + t('usage.pctOfUsage') + '</span></div>' + body + '</div>';
 }
 
 function moodLabel(pct) {
-  if (pct >= 1) return 'OUT OF USAGE';
-  if (pct >= 0.8) return 'RUNNING OUT';
-  return 'ALL CLEAR';
+  if (pct >= 1) return t('usage.moodOut');
+  if (pct >= 0.8) return t('usage.moodLow');
+  return t('usage.moodClear');
 }

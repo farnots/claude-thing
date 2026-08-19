@@ -1,5 +1,6 @@
 import { esc, fmtTokens, fmtDuration, moodFor, usageReadings } from './helpers.js';
 import { fmtClock, now } from '../clock.js';
+import { t, tn } from '../i18n.js';
 
 // The resting screen works as a desk clock: the clock stays the hero, and the
 // status line sits immediately beneath it, where the eye already is. Blocked
@@ -22,8 +23,8 @@ export function renderAmbient(state) {
 
   var blocked = state.asks.length;
   var head = blocked
-    ? '<div class="ahead blocked">' + blocked + (blocked === 1 ? ' NEEDS YOU' : ' NEED YOU') + '</div>'
-    : '<div class="ahead">NOTHING BLOCKED</div>';
+    ? '<div class="ahead blocked">' + tn('ambient.needsYou', blocked) + '</div>'
+    : '<div class="ahead">' + t('ambient.nothingBlocked') + '</div>';
 
   // The whole screen is the mascot's switch: he wanders everywhere, so no
   // fixed hotspot could reliably be "on him", and the clock has no other tap
@@ -32,11 +33,11 @@ export function renderAmbient(state) {
   return '<div class="screen ambient" data-action="mascot-toggle">' +
     '<div class="bigclock">' + fmtClock() + '</div>' +
     head +
-    '<div class="caption">' + working + ' WORKING · ' + resting + ' RESTING</div>' +
+    '<div class="caption">' + t('ambient.caption', { working: working, resting: resting }) + '</div>' +
     (lamps ? '<div class="fleet">' + lamps + '</div>' : '') +
     usageStrip(state.usage) +
-    '<div class="tokens">' + fmtTokens(totalOut) + ' tokens out</div>' +
-    '<div class="hint">' + (blocked ? 'press dial to answer' : 'press dial for sessions') + '</div>' +
+    '<div class="tokens">' + t('ambient.tokensOut', { tokens: fmtTokens(totalOut) }) + '</div>' +
+    '<div class="hint">' + t(blocked ? 'ambient.hintAnswer' : 'ambient.hintSessions') + '</div>' +
     '</div>';
 }
 
@@ -82,7 +83,7 @@ function sessionOf(r) {
 function timeLeft(l) {
   if (!l || typeof l.resetsAt !== 'number' || !l.resetsAt) return '';
   var ms = l.resetsAt - now();
-  if (ms <= 0) return 'RESET DUE';
+  if (ms <= 0) return t('ambient.resetDue');
   return fmtDuration(ms);
 }
 
@@ -91,7 +92,7 @@ function timeLeft(l) {
 // there is no account to name and the window itself needs saying, or the screen
 // carries a percentage of nothing in particular.
 function stripRow(r, named) {
-  var name = '<span class="aname">' + esc(named ? (r.label || r.id || '') : 'SESSION') + '</span>';
+  var name = '<span class="aname">' + esc(named ? (r.label || r.id || '') : t('ambient.session')) + '</span>';
   var l = sessionOf(r);
 
   // An account with no session figure fails inside its own row: the other one
@@ -100,7 +101,7 @@ function stripRow(r, named) {
   if (!l) {
     return '<div class="arow">' + name +
       '<span class="apct">—</span>' +
-      '<span class="anote">NO READING</span>' +
+      '<span class="anote">' + t('ambient.noReading') + '</span>' +
       '</div>';
   }
 
@@ -112,6 +113,6 @@ function stripRow(r, named) {
     '<span class="apct">' + Math.round(pct * 100) + '%</span>' +
     '<span class="utrack"><span class="ufill ' + m + '" style="width:' + (pct * 100).toFixed(1) + '%"></span></span>' +
     '<span class="aleft ' + m + '">' + timeLeft(l) + '</span>' +
-    '<span class="astale">' + (r.stale ? 'STALE' : '') + '</span>' +
+    '<span class="astale">' + (r.stale ? t('usage.stale') : '') + '</span>' +
     '</div>';
 }

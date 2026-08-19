@@ -5,6 +5,7 @@
 import crypto from 'node:crypto';
 import { PERMISSION_HOLD_MS } from './config.js';
 import { log } from './log.js';
+import { t } from './i18n.js';
 
 // A command you cannot take back must not cost the same gesture as "read a
 // file" — the device asks for a second press on anything flagged here. Kept
@@ -14,7 +15,8 @@ import { log } from './log.js';
 // --force past the truncation was invisible to its regex.
 const DESTRUCTIVE_RE = /\brm\s+-|--force\b|--hard\b|\bDROP\s|\bTRUNCATE\b|\bmkfs|\bdd\s+if=|\bchmod\s+777\b|curl[^|]*\|\s*(ba|z)?sh/i;
 
-export function createPermissionBridge({ emit, store, queue }) {
+// `lang` is a getter, as in queue.js and usage.js — see the comment there.
+export function createPermissionBridge({ emit, store, queue, lang = () => 'en' }) {
   const pending = new Map(); // requestId -> {res, timer, sessionId}
 
   function hookDecision(behavior) {
@@ -31,7 +33,7 @@ export function createPermissionBridge({ emit, store, queue }) {
   // been seen for the session; the device then simply omits the line.
   function intentFor(sessionId) {
     const s = sessionId && store.raw(sessionId);
-    return s && s.lastPrompt ? `you asked: ${s.lastPrompt}` : '';
+    return s && s.lastPrompt ? t(lang(), 'permission.youAsked', { prompt: s.lastPrompt }) : '';
   }
 
   // The device renders the tool name separately, so the summary is just the

@@ -152,7 +152,18 @@ back. It sticks across reboots.
 | **M** | Ambient clock. Tap the screen to hide or bring back the wandering sprite. |
 | **Touch** | Everything on screen is tappable. |
 
-Three things worth knowing:
+Four things worth knowing:
+
+**It speaks French, and it asks your Mac which language that is.** **Settings** on
+the control page at <http://127.0.0.1:8790> carries **Language** — Auto, English
+or Français — next to the clock format, and the choice lands on the device within
+a frame. Auto reads System Settings › Language & Region rather than the shell's
+`LANG`, because that variable belongs to whichever terminal launched the daemon
+and says nothing about the Mac: a French Mac started from an `en_US` shell would
+otherwise be told it reads English. The control page follows the same setting, so
+the two are never in different languages. What stays English either way is text
+Claude Code itself printed — a plan's options are read off its screen and typed
+back to it, and a reset time in a usage reading is quoted from `claude /usage`.
 
 **Two Claude accounts, two columns.** If you sign in to more than one Claude
 account on the same Mac — say a personal one and a work one, kept apart with

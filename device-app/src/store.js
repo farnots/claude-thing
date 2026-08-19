@@ -1,6 +1,7 @@
 // App state: session snapshot, detail cache, permission queue, daemon link.
 
 import { setTzOffset, setServerNow, setClock24, now } from './clock.js';
+import { setLang } from './i18n.js';
 
 var state = {
   sessions: [],
@@ -75,6 +76,8 @@ export function applySnapshot(snap) {
   setServerNow(snap.serverNowMs);
   setTzOffset(snap.tzOffsetMin);
   setClock24(snap.clock24);
+  // Which catalog the screens draw from — resolved on the Mac, see i18n.js.
+  setLang(snap.lang);
   var sel = state.sessions[state.selectedIndex];
   var fields = { sessions: snap.sessions || [], stats: snap.stats || state.stats };
   // Details for sessions the daemon no longer lists would pile up forever on a
