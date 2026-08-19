@@ -24,6 +24,7 @@ import { markOwnSession } from './own-sessions.js';
 import {
   configDirMissing, envForAccount, loadAccounts, normalizeAccounts,
 } from './usage-accounts.js';
+import { parseResetAt } from './usage-reset.js';
 import { readState, writeState } from './persist.js';
 import { log } from './log.js';
 
@@ -92,11 +93,17 @@ export function parseUsage(text, now = Date.now()) {
 
     const limit = LIMIT_RE.exec(line);
     if (limit) {
+      // The clause stays prose — it is what the usage screen prints — and rides
+      // alongside the instant it resolves to, which is what a countdown needs.
+      // Zero means unresolvable, and is left off rather than sent: the connector
+      // casts an NSNumber of 0 to `false` on its way to the device.
+      const resetsAt = limit[3] ? parseResetAt(limit[3], limit[4], now) : 0;
       limits.push({
         key: limit[1].toLowerCase().replace(/[^a-z]+/g, '-'),
         label: labelFor(limit[1]),
         used: Number(limit[2]) / 100,
         detail: limit[3] ? `resets ${limit[3].trim()}` : '',
+        ...(resetsAt ? { resetsAt } : {}),
       });
       continue;
     }
@@ -177,6 +184,7 @@ export function slimUsage(u) {
     // hold bookkeeping reconcileUsage attaches (lowSeen) stays daemon-side.
     limits: (u.limits || []).map((l) => ({
       key: l.key, label: l.label, used: l.used, detail: l.detail,
+      ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}),
     })),
     windows: first ? [{
       window: first.window,
@@ -249,7 +257,15 @@ export function reconcileUsage(prev, next) {
     // arrived without any. The count rides on the limit so it accumulates
     // across polls, and vanishes the moment a reading is taken at face value.
     holding = true;
-    return { ...l, used: p.used, detail: l.detail || p.detail, lowSeen };
+    // resetsAt is a projection of the clause, so it follows whichever clause
+    // wins here — never this reading's percentage with the other one's instant.
+    return {
+      ...l,
+      used: p.used,
+      detail: l.detail || p.detail,
+      resetsAt: l.detail ? l.resetsAt : p.resetsAt,
+      lowSeen,
+    };
   });
   // A held figure is not current, and must not be dated or persisted as if it
   // were — same treatment the carry-over above gets.

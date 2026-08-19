@@ -38,6 +38,23 @@ test('parses every limit line with its reset time', () => {
   assert.equal(u.limits[0].key, 'session');
 });
 
+test('every reset clause also travels as an instant', () => {
+  // The clause is what the usage screen prints; resetsAt is what a countdown can
+  // subtract. Resolved in the zone the line states, in the year the reading sits
+  // in — neither of which appears anywhere in the text as a number.
+  const now = Date.parse('2026-07-30T01:00:00-04:00');
+  const u = parseUsage(SAMPLE, now);
+  assert.equal(u.limits[0].resetsAt, Date.parse('2026-07-30T05:19:00-04:00'));
+  assert.equal(u.limits[1].resetsAt, Date.parse('2026-08-04T16:59:00-04:00'));
+  assert.equal(u.limits[2].resetsAt, Date.parse('2026-08-04T17:00:00-04:00'));
+
+  // A limit printed without a reset clause carries no instant at all — the field
+  // is absent rather than 0, which the connector would hand the device as
+  // `false`.
+  const bare = parseUsage('Current session: 4% used', 1);
+  assert.equal('resetsAt' in bare.limits[0], false);
+});
+
 test('percentages are fractions, never above 1', () => {
   const u = parseUsage(SAMPLE);
   for (const l of u.limits) {
@@ -183,11 +200,24 @@ test('a lower reading for the same window is a stale cache read, not a refund', 
 
 test('a reading that lost its reset clause cannot pass as a new window', () => {
   // the zeroed shape a clobbered ~/.claude.json cache prints
-  const prev = reading([{ key: 'session', label: 'SESSION', used: 0.06, detail: 'resets Aug 1 at 2am' }]);
+  const prev = reading([{ key: 'session', label: 'SESSION', used: 0.06, detail: 'resets Aug 1 at 2am', resetsAt: 111 }]);
   const next = reading([{ key: 'session', label: 'SESSION', used: 0, detail: '' }]);
   const l = reconcileUsage(prev, next).limits[0];
   assert.equal(l.used, 0.06);
   assert.equal(l.detail, 'resets Aug 1 at 2am', 'the held reading keeps its reset clause');
+  assert.equal(l.resetsAt, 111, 'and the instant that clause resolved to');
+});
+
+test('a held figure never wears the other reading\'s reset instant', () => {
+  // resetsAt is a projection of the clause, so whichever clause survives the hold
+  // brings its own instant. Taking this reading's percentage with the previous
+  // clause and this one's instant would date the bar against a window it is not
+  // reporting on.
+  const prev = reading([{ key: 'session', label: 'SESSION', used: 0.9, detail: 'resets Aug 1 at 2am', resetsAt: 111 }]);
+  const next = reading([{ key: 'session', label: 'SESSION', used: 0.4, detail: 'resets Aug 1 at 2am', resetsAt: 222 }]);
+  const l = reconcileUsage(prev, next).limits[0];
+  assert.equal(l.used, 0.9, 'the drop is held');
+  assert.equal(l.resetsAt, 222, 'the clause is this reading\'s, so the instant is too');
 });
 
 test('a clause-less drop is held twice and taken on the third reading', () => {
@@ -291,7 +321,7 @@ test('slimUsage keeps what the device renders and drops the rest', () => {
   const slim = slimUsage({
     updatedTs: 5, updatedLabel: 'updated', stale: true, error: undefined,
     subscription: 'You are currently using your subscription…',
-    limits: [{ key: 'session', label: 'SESSION', used: 0.5, detail: 'resets soon' }],
+    limits: [{ key: 'session', label: 'SESSION', used: 0.5, detail: 'resets soon', resetsAt: 99 }],
     windows: [
       {
         window: 'Last 24h', requests: 10, sessions: 2,
@@ -314,6 +344,7 @@ test('slimUsage keeps what the device renders and drops the rest', () => {
     { window: 'Last 24h', requests: 10, sessions: 2 }
   );
   assert.equal(slim.limits[0].used, 0.5, 'every field a bar draws survives');
+  assert.equal(slim.limits[0].resetsAt, 99, 'including the instant the countdown needs');
   assert.equal(slim.stale, true);
 });
 

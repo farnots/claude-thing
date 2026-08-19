@@ -293,6 +293,108 @@ test('ambient shows a lamp per session and reads as a desk clock', () => {
   assert.match(html, /data-action="mascot-toggle"/);
 });
 
+// ---- the clock screen's session window --------------------------------------
+
+const MAC_NOW = Date.parse('2026-08-19T17:20:00Z');
+const inMs = (h, m) => MAC_NOW + ((h * 60 + m) * 60 + 30) * 1000;
+const acct = (over = {}) => ({
+  id: 'default', label: 'PERSO', stale: false,
+  limits: [{ key: 'session', label: 'SESSION', used: 0.44, detail: 'resets later', resetsAt: inMs(1, 49) }],
+  ...over,
+});
+
+test('the clock screen carries the session window, one row per account', () => {
+  setServerNow(MAC_NOW);
+  const html = renderAmbient(baseState({
+    usage: {
+      accounts: [
+        acct({ id: 'default', label: 'PERSO', limits: [{ key: 'session', used: 0, resetsAt: inMs(3, 48) }] }),
+        acct({ id: 'poly', label: 'POLYCEA' }),
+      ],
+    },
+  }));
+
+  assert.equal((html.match(/class="arow"/g) || []).length, 2, 'a row per account');
+  assert.match(html, /PERSO/);
+  assert.match(html, /POLYCEA/);
+  assert.match(html, />0%</);
+  assert.match(html, />44%</);
+  // the countdown is computed against the Mac clock, not the device's own
+  assert.match(html, /3h 48m/);
+  assert.match(html, /1h 49m/);
+  assert.ok(!html.includes('SESSION'), 'the account names say it; the word would say it twice');
+  resetClock();
+});
+
+test('one account names the window instead, and the thresholds are the usage screen\'s', () => {
+  setServerNow(MAC_NOW);
+  // the flat mirror a daemon that predates accounts sends: one unnamed reading
+  const html = renderAmbient(baseState({
+    usage: { limits: [{ key: 'session', used: 0.86, resetsAt: inMs(0, 38) }] },
+  }));
+  assert.match(html, /class="aname">SESSION</, 'no account to name, so name the window');
+  assert.match(html, />86%</);
+  assert.match(html, /38m/);
+  assert.match(html, /ufill mood-low/, '86% sweats, same as on the usage screen');
+
+  const out = renderAmbient(baseState({
+    usage: { limits: [{ key: 'session', used: 1, resetsAt: inMs(2, 0) }] },
+  }));
+  assert.match(out, /ufill mood-out/);
+  assert.match(out, /class="aleft mood-out"/, 'out of session: how long is left is the news');
+  resetClock();
+});
+
+test('the strip never guesses: no session limit, no reset, no reading at all', () => {
+  setServerNow(MAC_NOW);
+  // a weekly figure is not a session figure, and is never drawn as one
+  const weekly = renderAmbient(baseState({
+    usage: { accounts: [
+      acct({ id: 'a', label: 'PERSO', limits: [{ key: 'week-all-models', used: 0.3, resetsAt: inMs(50, 0) }] }),
+      acct({ id: 'b', label: 'POLYCEA' }),
+    ] },
+  }));
+  assert.match(weekly, /NO READING/);
+  assert.ok(!weekly.includes('>30%<'), 'a weekly bar must not sit under a session row');
+
+  // an account the poll could not read fails inside its own row
+  const broken = renderAmbient(baseState({
+    usage: { accounts: [acct({ id: 'a', label: 'PERSO', limits: [], error: 'configuration file not found' }), acct({ id: 'b', label: 'POLYCEA' })] },
+  }));
+  assert.match(broken, /NO READING/);
+  assert.match(broken, /44%/, 'the other account keeps reporting');
+  assert.ok(!broken.includes('configuration file'), 'the reason belongs on the usage screen');
+
+  // a limit with no resolvable reset clause: the percentage still draws
+  const noReset = renderAmbient(baseState({
+    usage: { limits: [{ key: 'session', used: 0.2 }] },
+  }));
+  assert.match(noReset, />20%</);
+  assert.ok(!noReset.includes('RESET DUE'), 'silence, not a wrong countdown');
+
+  // a window that rolled over under a held reading counts to zero, never past it
+  const due = renderAmbient(baseState({
+    usage: { stale: true, limits: [{ key: 'session', used: 0.97, resetsAt: MAC_NOW - 60_000 }] },
+  }));
+  assert.match(due, /RESET DUE/);
+  assert.match(due, /STALE/, 'the percentage is held, and says so');
+
+  // before the first reading lands there is no strip at all
+  assert.ok(!renderAmbient(baseState()).includes('ustrip'), 'no ghost row while waiting');
+  resetClock();
+});
+
+test('past two accounts the strip says how many it is not showing', () => {
+  setServerNow(MAC_NOW);
+  const html = renderAmbient(baseState({
+    usage: { accounts: [acct({ id: 'a' }), acct({ id: 'b', label: 'POLYCEA' }), acct({ id: 'c', label: 'THIRD' })] },
+  }));
+  assert.equal((html.match(/class="arow"/g) || []).length, 2);
+  assert.match(html, /class="amore">\+1</);
+  assert.ok(!html.includes('THIRD'), 'the third account is on the usage page');
+  resetClock();
+});
+
 test('detail shows tokens, cache and state, and waits politely before loading', () => {
   const loading = renderDetail(baseState(), 'a');
   assert.match(loading, /LOADING/);
