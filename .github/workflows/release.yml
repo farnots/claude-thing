@@ -126,9 +126,31 @@ jobs:
           gh release download "$NOCTURNE_IMAGE_TAG" --repo usenocturne/nocturne \
             --pattern 'nocturne_image_*.zip' --dir firmware --clobber
 
-      # debugfs drives the carved ext4 rootfs images inside superbird.wic.
+      # debugfs drives the carved ext4 rootfs images inside superbird.wic. All
+      # three binaries ship on the ubuntu-latest image, so the apt run is a
+      # fallback for a runner image that drops one — not the normal path. It used
+      # to be unconditional, and on 2026-08-19 the runners' apt mirror stopped
+      # answering: `apt-get update` hung for 78 minutes on one release run and
+      # half an hour on the next, and because this workflow serializes on
+      # `concurrency: group: release` with cancel-in-progress false, a wedged run
+      # holds every queued release behind it. Nothing published for three claimed
+      # versions. The timeout is the real fix: a mirror that stalls now costs one
+      # failed run that can be re-run, not a blocked channel.
       - name: install ext4 tooling
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends e2fsprogs zip unzip
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          missing=""
+          for bin in debugfs zip unzip; do
+            command -v "$bin" >/dev/null 2>&1 || missing="$missing $bin"
+          done
+          if [ -z "$missing" ]; then
+            echo "debugfs, zip and unzip are already on the runner"
+            exit 0
+          fi
+          echo "missing:$missing — falling back to apt"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends e2fsprogs zip unzip
 
       - name: inject the Claude app
         env:
