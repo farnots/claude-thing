@@ -797,9 +797,16 @@ function questionToast(ask, res, answers) {
   // the daemon restarted under it. Not a failure to answer, and not something
   // pressing again fixes: the terminal owns it now.
   if (/already resolved/i.test(why)) return 'GONE — ANSWER IN TERMINAL';
+  // The daemon read the dialog before typing and the choice was not on it, so it
+  // typed nothing. Pressing again cannot help — whatever is up there now is not
+  // what this card was drawn from.
+  if (/does not match/i.test(why)) return 'DIALOG CHANGED — ANSWER ON MAC';
+  // Keys sent to a pane in copy mode scroll it instead of answering, so they
+  // are not sent at all. One q on the Mac makes the card work again.
+  if (/copy mode/i.test(why)) return 'TMUX PANE IN COPY MODE — PRESS q';
   if (/denied/i.test(why)) return 'ALLOW AUTOMATION IN MAC SETTINGS';
   if (/background agent/i.test(why)) return 'BACKGROUND AGENT — NO WINDOW';
-  if (/registry|tty|no session|unknown session/i.test(why)) return 'NO TERMINAL WINDOW FOUND';
+  if (/registry|tty|no session|unknown session|identify the terminal/i.test(why)) return 'NO TERMINAL WINDOW FOUND';
   return 'COULD NOT ANSWER';
 }
 

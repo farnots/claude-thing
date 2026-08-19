@@ -1,0 +1,25 @@
+
+╭─── Claude Code v2.1.235 ─────────────────────────────────────────────────────────────────────╮
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+  ────────────────────────────────────────────────────────────────────────────────────────────
+   Ready to code?
+
+   Here is Claude's plan:
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   Plan : Créer hello.txt
+
+   Contexte
+
+   Créer un fichier simple contenant un message d'accueil.
+
+   Approche
+
+   Utiliser l'outil Write pour créer le fichier hello.txt à la racine du répertoire courant   ↓
+  ────────────────────────────────────────────────────────────────────────────────────────────
+   Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+
+   ctrl+g to edit in Nvim · ~/.claude/plans/propose-un-plan-minimal-cozy-candy.md

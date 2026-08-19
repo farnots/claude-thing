@@ -86,8 +86,14 @@ export function createPermissionBridge({ emit, store, queue }) {
         res.end(hookDecision('ask'));
       } catch {}
       // Only the plan needs queueing — re-queueing the question here would
-      // duplicate the PreToolUse ask under a second id.
-      if (payload.tool_name === 'ExitPlanMode') queue.onPlanApproval(payload);
+      // duplicate the PreToolUse ask under a second id. It is async — it reads
+      // the dialog off the session's pane, which Claude Code only draws once
+      // this response is out — so nothing here awaits it, and a failure must
+      // land in the log rather than as an unhandled rejection.
+      if (payload.tool_name === 'ExitPlanMode') {
+        Promise.resolve(queue.onPlanApproval(payload))
+          .catch((e) => log('PB', `plan queueing failed: ${e && e.message}`));
+      }
       return;
     }
 

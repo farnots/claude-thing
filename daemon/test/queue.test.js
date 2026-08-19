@@ -7,7 +7,7 @@ function setup(focusBehaviour = {}) {
   const events = [];
   const store = createStore();
   store.touch('sess-1', { name: 'my-project' });
-  const calls = { focus: 0, typed: [] };
+  const calls = { focus: 0, typed: [], targets: [], captures: [], paneLookups: 0 };
 
   // A real serializer, not a pass-through: the ordering it enforces is the
   // thing under test, so the stub must not paper over it.
@@ -22,17 +22,38 @@ function setup(focusBehaviour = {}) {
     async focusSession() {
       calls.focus++;
       if (focusBehaviour.beforeFocus) await focusBehaviour.beforeFocus();
-      return focusBehaviour.focus || { focused: true, exact: true, app: 'Terminal' };
+      if (focusBehaviour.focus) return focusBehaviour.focus;
+      // A pane is exact the same way a Terminal tab is, and carries the id the
+      // keys and the screen read are addressed to.
+      if (focusBehaviour.pane) {
+        return { focused: true, exact: true, app: 'tmux', pane: focusBehaviour.pane, paneLabel: '0:1.2' };
+      }
+      return { focused: true, exact: true, app: 'Terminal' };
     },
     async typeKey(ch) {
       calls.typed.push(ch);
       return focusBehaviour.type || { typed: true };
     },
-    async typeSequence(keys) {
+    async typeSequence(keys, target) {
       for (const k of keys) calls.typed.push(k);
+      calls.targets.push(target && target.pane);
       return focusBehaviour.type || { typed: true };
     },
   };
+
+  // A session in a tmux pane: the queue can then read what the dialog really
+  // shows, both when it queues a plan and again before it types an answer.
+  if (focusBehaviour.pane) {
+    focus.paneForSession = async () => {
+      calls.paneLookups++;
+      return { id: focusBehaviour.pane, label: '0:1.2' };
+    };
+    focus.capturePane = async (id) => {
+      calls.captures.push(id);
+      const screens = focusBehaviour.screens;
+      return Array.isArray(screens) ? (screens.shift() ?? null) : (screens ?? null);
+    };
+  }
 
   const queue = createQueue({ emit: (topic, data) => events.push({ topic, data }), store, focus });
   return { queue, events, calls, store };
@@ -388,9 +409,9 @@ const PLAN_HOOK = {
   tool_input: { plan: '# Fix: session tiles vanish\n\n## Context\n\nlots of detail' },
 };
 
-test('a plan approval becomes a question with the two approve choices', () => {
+test('a plan approval becomes a question with the two approve choices', async () => {
   const { queue, events, store } = setup();
-  queue.onPlanApproval(PLAN_HOOK);
+  await queue.onPlanApproval(PLAN_HOOK);
 
   const ev = events.find((e) => e.topic === 'claude.question.request');
   assert.ok(ev);
@@ -398,14 +419,16 @@ test('a plan approval becomes a question with the two approve choices', () => {
   assert.equal(ev.data.header, 'PLAN');
   assert.equal(ev.data.question, 'Fix: session tiles vanish', 'plan heading, hashes stripped');
   assert.equal(ev.data.options.length, 2, 'only the approve paths — declining needs typed feedback');
-  assert.match(ev.data.options[0].label, /bypass permissions/);
-  assert.match(ev.data.options[1].label, /manually approve/);
+  // No pane to read, so these are the CLI's default wording, flagged as guessed.
+  assert.match(ev.data.options[0].label, /auto-accept edits/);
+  assert.match(ev.data.options[1].label, /manually approve edits/);
+  assert.equal(ev.data.optionsUnverified, true);
   assert.equal(store.get('sess-1').state, 'attention', 'session shows as blocked');
 });
 
 test('answering a plan walks to the chosen approve option', async () => {
   const { queue, calls } = setup();
-  queue.onPlanApproval(PLAN_HOOK);
+  await queue.onPlanApproval(PLAN_HOOK);
   const [ask] = queue.list();
 
   const res = await queue.answerQuestion(ask.id, 1);
@@ -414,16 +437,16 @@ test('answering a plan walks to the chosen approve option', async () => {
   assert.equal(queue.size(), 0);
 });
 
-test('a plan with no heading still queues with a fallback question', () => {
+test('a plan with no heading still queues with a fallback question', async () => {
   const { queue } = setup();
-  queue.onPlanApproval({ ...PLAN_HOOK, tool_input: { plan: '' } });
+  await queue.onPlanApproval({ ...PLAN_HOOK, tool_input: { plan: '' } });
   const [ask] = queue.list();
   assert.equal(ask.question, 'Ready to code?');
 });
 
-test('the terminal answering the plan dialog clears our copy too', () => {
+test('the terminal answering the plan dialog clears our copy too', async () => {
   const { queue } = setup();
-  queue.onPlanApproval(PLAN_HOOK);
+  await queue.onPlanApproval(PLAN_HOOK);
   queue.onQuestionAnswered({ session_id: 'sess-1' });
   assert.equal(queue.size(), 0);
 });
@@ -439,7 +462,7 @@ test('list is oldest-first', () => {
   assert.ok(asks[0].createdTs <= asks[1].createdTs);
 });
 
-test('a question and a plan both carry the intent line when a prompt is known', () => {
+test('a question and a plan both carry the intent line when a prompt is known', async () => {
   const { queue, events, store } = setup();
   store.touch('sess-1', { lastPrompt: 'migrate the schema' });
   queue.onQuestion(QUESTION_HOOK);
@@ -448,7 +471,7 @@ test('a question and a plan both carry the intent line when a prompt is known', 
   assert.equal(queue.list()[0].intent, 'you asked: migrate the schema');
 
   events.length = 0;
-  queue.onPlanApproval({ session_id: 'sess-1', tool_input: { plan: '# Plan\ndo it' } });
+  await queue.onPlanApproval({ session_id: 'sess-1', tool_input: { plan: '# Plan\ndo it' } });
   const p = events.find((e) => e.topic === 'claude.question.request');
   assert.equal(p.data.intent, 'you asked: migrate the schema');
 });
@@ -485,4 +508,124 @@ test('an interrupt for another session is not ours to act on', () => {
   queue.onQuestion(QUESTION_HOOK);
   queue.onInterrupted('sess-other', Date.now() + 1);
   assert.equal(queue.size(), 1);
+});
+
+// ── Answering through a tmux pane ────────────────────────────────────────────
+// The pane is the case the whole feature exists for: keys go in by name, so the
+// screen they are about to land on can be read first.
+
+const PLAN_SCREEN = [
+  '   Claude has written up a plan and is ready to execute. Would you like to proceed?',
+  '',
+  '   ❯ 1. Yes, and use auto mode',
+  '     2. Yes, manually approve edits',
+  '     3. Tell Claude what to change',
+].join('\n');
+
+// The variant this account cannot produce, and the reason reading beats
+// guessing: approving is row 2, and row 1 costs the conversation.
+const CLEAR_CONTEXT_SCREEN = [
+  '   Claude has written up a plan and is ready to execute. Would you like to proceed?',
+  '',
+  '   ❯ 1. Yes, clear context (14% used) and use auto mode',
+  '     2. Yes, and use auto mode',
+  '     3. Yes, manually approve edits',
+  '     4. No, keep planning',
+].join('\n');
+
+test('a plan in a pane offers what the screen really shows', async () => {
+  const { queue, events } = setup({ pane: '%1', screens: PLAN_SCREEN });
+  await queue.onPlanApproval(PLAN_HOOK);
+
+  const ev = events.find((e) => e.topic === 'claude.question.request');
+  assert.deepEqual(ev.data.options.map((o) => o.label), [
+    'Yes, and use auto mode',
+    'Yes, manually approve edits',
+  ], 'auto mode, not the bypass label this used to hardcode');
+  assert.equal(ev.data.optionsUnverified, undefined, 'these were read, not guessed');
+});
+
+test('a dialog that takes a moment to appear is waited for', async () => {
+  // The PermissionRequest hook is answered before Claude Code draws the dialog,
+  // so the first look at the pane finds the plan still being written out.
+  const { queue, events, calls } = setup({
+    pane: '%1',
+    screens: ['   Writing the plan…', '   Writing the plan…', PLAN_SCREEN],
+  });
+  await queue.onPlanApproval(PLAN_HOOK);
+  assert.equal(calls.captures.length, 3);
+  const ev = events.find((e) => e.topic === 'claude.question.request');
+  assert.equal(ev.data.options[0].label, 'Yes, and use auto mode');
+});
+
+test('a pane that never shows a dialog falls back to the guessed options', async () => {
+  const { queue, events } = setup({ pane: '%1', screens: '   nothing here' });
+  await queue.onPlanApproval(PLAN_HOOK);
+  const ev = events.find((e) => e.topic === 'claude.question.request');
+  assert.equal(ev.data.optionsUnverified, true);
+  assert.match(ev.data.options[0].label, /auto-accept edits/);
+});
+
+test('answering in a pane sends the keys to that pane', async () => {
+  const { queue, calls } = setup({ pane: '%1', screens: [PLAN_SCREEN, PLAN_SCREEN] });
+  await queue.onPlanApproval(PLAN_HOOK);
+  const [ask] = queue.list();
+
+  const res = await queue.answerQuestion(ask.id, 1);
+  assert.equal(res.accepted, true);
+  assert.deepEqual(calls.typed, ['down', 'return']);
+  assert.deepEqual(calls.targets, ['%1'], 'typed into the pane, not the frontmost window');
+});
+
+test('an option that moved is keyed where it actually is', async () => {
+  // Card drawn from one screen, answered against another: the clear-context row
+  // appeared on top and pushed every choice down one.
+  const { queue, calls } = setup({ pane: '%1', screens: [PLAN_SCREEN, CLEAR_CONTEXT_SCREEN] });
+  await queue.onPlanApproval(PLAN_HOOK);
+  const [ask] = queue.list();
+  assert.equal(ask.options[0].label, 'Yes, and use auto mode');
+
+  const res = await queue.answerQuestion(ask.id, 0);
+  assert.equal(res.accepted, true);
+  assert.deepEqual(calls.typed, ['down', 'return'],
+    'one Down: auto mode is row 2 now, and row 1 would have cleared the context');
+});
+
+test('a screen that does not carry the choice gets no keys at all', async () => {
+  const stale = [
+    '   Do you want to proceed?',
+    '   ❯ 1. Yes',
+    '     2. No',
+  ].join('\n');
+  const { queue, calls } = setup({ pane: '%1', screens: [PLAN_SCREEN, stale] });
+  await queue.onPlanApproval(PLAN_HOOK);
+  const [ask] = queue.list();
+
+  const res = await queue.answerQuestion(ask.id, 0);
+  assert.equal(res.accepted, false);
+  assert.match(res.reason, /does not match/);
+  assert.deepEqual(calls.typed, [], 'nothing typed into a dialog we do not recognize');
+  assert.equal(queue.size(), 1, 'the ask stays: the terminal still owns it');
+});
+
+test('an unreadable screen is answered on the card, not refused', async () => {
+  // A question whose options carry previews draws a layout with no numbered
+  // list. Refusing those would break answering them at all.
+  const { queue, calls } = setup({ pane: '%1', screens: [PLAN_SCREEN, 'no numbered list here'] });
+  await queue.onPlanApproval(PLAN_HOOK);
+  const [ask] = queue.list();
+
+  const res = await queue.answerQuestion(ask.id, 1);
+  assert.equal(res.accepted, true);
+  assert.deepEqual(calls.typed, ['down', 'return']);
+});
+
+test('a session with no pane is answered exactly as before', async () => {
+  const { queue, calls } = setup();
+  await queue.onPlanApproval(PLAN_HOOK);
+  const [ask] = queue.list();
+  const res = await queue.answerQuestion(ask.id, 1);
+  assert.equal(res.accepted, true);
+  assert.deepEqual(calls.typed, ['down', 'return']);
+  assert.deepEqual(calls.targets, [undefined], 'no pane target: the AppleScript route');
 });
