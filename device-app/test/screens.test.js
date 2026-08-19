@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { esc, fmtTokens, fmtDuration, stateLabel, modeLabel, effortLabel, isDestructive, watchTarget } from '../src/screens/helpers.js';
+import { esc, fmtTokens, fmtDuration, stateLabel, modeLabel, effortLabel, isDestructive, watchTarget, projectColor, projectHue } from '../src/screens/helpers.js';
 import { fmtClock, setTzOffset, setServerNow, setClock24, now, resetClock } from '../src/clock.js';
 import { renderList } from '../src/screens/session-list.js';
 import { renderQueue } from '../src/screens/queue.js';
@@ -1088,4 +1088,77 @@ test('a daemon that predates accounts still renders', () => {
   assert.match(html, /SESSION/);
   assert.match(html, /width:11\.0%/);
   assert.match(html, /updated 01:46/);
+});
+
+
+// --- project colour ----------------------------------------------------------
+
+const spines = (html) => (html.match(/class="spine" style="background:([^"]+)"/g) || []);
+
+test('tiles of the same project share a stripe, and different projects do not', () => {
+  const html = renderList(baseState({
+    sessions: [
+      session({ id: 'a', name: 'thing', project: 'aaaaaaaa' }),
+      session({ id: 'b', name: 'thing', project: 'aaaaaaaa' }),
+      session({ id: 'c', name: 'thing', project: 'bbbbbbbb' }),
+    ],
+  }));
+  const found = spines(html);
+  assert.equal(found.length, 3);
+  assert.equal(found[0], found[1], 'one directory, one colour');
+  assert.notEqual(found[0], found[2],
+    'three tiles all reading "thing" — the stripe is the only thing that separates them');
+});
+
+test('a session with no project draws no stripe at all', () => {
+  const html = renderList(baseState({ sessions: [session({ project: '' })] }));
+  assert.equal(spines(html).length, 0, 'no colour beats a colour standing for "unknown"');
+  assert.match(html, /class="cap"/, 'the state cap is untouched either way');
+});
+
+test('the stripe never displaces the cap or the selection ring', () => {
+  const html = renderList(baseState({
+    sessions: [session({ state: 'attention', pendingPermission: true, project: 'aaaaaaaa' })],
+  }));
+  assert.match(html, /class="tile state-attention selected/, 'the dial ring is still the selected class');
+  assert.match(html, /class="cap"><\/span><span class="spine"/,
+    'cap first, stripe second — the stripe owns the corner, the cap keeps saying ATTENTION');
+});
+
+test('project colours land on a step the eye can resolve, and stay off the lamps', () => {
+  assert.equal(projectHue(''), null);
+  assert.equal(projectColor(''), '');
+  for (let i = 0; i < 500; i++) {
+    const key = (i * 2654435761 >>> 0).toString(16).padStart(8, '0');
+    const hue = projectHue(key);
+    assert.equal(hue % 15, 0, 'hues sit on 15-degree steps, so two projects never land almost-alike');
+    const sat = Number(projectColor(key).match(/, (\d+)%,/)[1]);
+    assert.ok(sat <= 71, 'never more saturated than --danger, or a stripe reads as a state');
+  }
+});
+
+test('the session screen wears its project on the bar, and prints the path it stands for', () => {
+  const detail = {
+    id: 'a', name: 'proj', state: 'busy', tokens: { in: 1, out: 2 }, cacheRead: 0,
+    cwd: '/Users/dev/monorepo/proj', model: 'claude-fable-5', startedTs: Date.now(),
+    currentTool: null, lastMessage: '', permission: null, project: 'aaaaaaaa',
+  };
+  const html = renderDetail(baseState({ details: { a: detail } }), 'a');
+  const color = projectColor('aaaaaaaa');
+  assert.ok(html.includes('<span class="mark" style="background:' + color + '"></span>'),
+    'the same colour the tile wore, so opening a session confirms which one you opened');
+  assert.ok(html.includes('style="border-bottom-color:' + color + '"'));
+  assert.match(html, /\/Users\/dev\/monorepo\/proj/,
+    'the whole path is the legend for the colour — the basename is already the title above');
+
+  const plain = renderDetail(baseState({ details: { a: { ...detail, project: '' } } }), 'a');
+  assert.ok(plain.includes('<span class="mark"></span>'), 'no project, no tint, brand accent stands');
+});
+
+test('screens that span every session keep the brand accent', () => {
+  for (const html of [renderList(baseState({ sessions: [session({ project: 'aaaaaaaa' })] })),
+                      renderQueue(baseState()), renderUsage(baseState())]) {
+    assert.ok(html.includes('<span class="mark"></span>'),
+      'a bar over many projects cannot honestly wear one of their colours');
+  }
 });

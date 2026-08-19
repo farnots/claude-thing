@@ -10,6 +10,22 @@ const NAMES = [
   'claude-thing', 'nocturne-ui', 'credit_card_picker', 'api-server',
   'design-system', 'infra-terraform', 'docs-site', 'ml-pipeline', 'mobile-app',
 ];
+// Which directory each mock session runs in. Not one per name: three of them
+// share a checkout and two more share another, because the project stripe only
+// shows what it is for when some tiles group and others stand alone. The pair
+// at the end is the case the colour exists for — same basename, different
+// project, which nothing else on the tile distinguishes.
+const DIRS = [
+  '/Users/dev/claude-thing',
+  '/Users/dev/claude-thing',
+  '/Users/dev/credit_card_picker',
+  '/Users/dev/claude-thing',
+  '/Users/dev/monorepo/design-system',
+  '/Users/dev/infra-terraform',
+  '/Users/dev/monorepo/docs-site',
+  '/Users/dev/ml/mobile-app',
+  '/Users/dev/native/mobile-app',
+];
 const TOOLS = [
   ['Bash', { command: 'npm test' }],
   ['Edit', { file_path: 'src/index.js' }],
@@ -24,7 +40,7 @@ export function startMockSource({ store, permissionBridge, queue }) {
     const id = `mock-${i}-${name}`;
     store.upsert(id, {
       name,
-      cwd: `/Users/dev/${name}`,
+      cwd: DIRS[i],
       model: 'claude-fable-5',
       tokensIn: 1200 * (i + 1),
       tokensOut: 800 * (i + 1),

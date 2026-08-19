@@ -1,4 +1,4 @@
-import { esc, topbar, fmtTokens, fmtDuration, stateLabel } from './helpers.js';
+import { esc, topbar, fmtTokens, fmtDuration, stateLabel, projectColor } from './helpers.js';
 import { now } from '../clock.js';
 import { t } from '../i18n.js';
 
@@ -21,14 +21,18 @@ export function renderDetail(state, id) {
       '<div class="empty">' + t('detail.loading') + '</div></div>';
   }
   var meta = [
-    d.cwd ? d.cwd.split('/').pop() : null,
+    // The whole path, not its last segment: the name above already prints that,
+    // and the path is what the bar's colour stands for — two projects can end
+    // in the same folder name and the tint is all that told them apart.
+    d.cwd || null,
     d.model ? d.model.replace(/^claude-/, '') : null,
     d.startedTs ? fmtDuration(now() - d.startedTs) : null,
   ];
   var metaStr = [];
   for (var i = 0; i < meta.length; i++) if (meta[i]) metaStr.push(meta[i]);
 
-  return '<div class="screen">' + topbar(t('bar.session'), state.daemonConnected) +
+  return '<div class="screen">' +
+    topbar(t('bar.session'), state.daemonConnected, '', projectColor(d.project)) +
     '<div class="detail state-' + d.state + '">' +
     '<div class="name">' + esc(d.name) + '</div>' +
     '<div class="meta">' + esc(metaStr.join(' · ')) + '</div>' +

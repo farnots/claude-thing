@@ -88,6 +88,12 @@ html, body {
   padding: 0 16px;
   border-bottom: 1px solid var(--rule);
 }
+/* A bar that belongs to one session says so in that project's colour, and the
+   rule thickens from a hairline to something you read across the room. The 46px
+   is border-box, so the extra 2px come out of the bar and nothing below moves. */
+.topbar.tinted {
+  border-bottom-width: 3px;
+}
 .topbar .mark {
   width: 12px;
   height: 12px;
@@ -188,7 +194,9 @@ html, body {
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 15px 18px 14px 18px;
+  /* Left padding carries the project spine plus its own clearance, so text
+     keeps roughly the gap it has on the right. */
+  padding: 15px 18px 14px 22px;
   border-radius: 10px;
   overflow: hidden;
   background: var(--panel);
@@ -210,6 +218,19 @@ html, body {
   background: var(--rule);
 }
 .tile.state-attention .cap { background: var(--warn); }
+/* The project stripe: a third axis, orthogonal to both marks above it. Its hue
+   is the session's working directory and nothing else — which tile needs you
+   stays the cap's job, which tile you are on stays the ring's. Declared after
+   .cap so it paints the corner they share, and its saturation is set below the
+   state colours (see projectColor in helpers.js) so no hue can impersonate one.
+   Absent entirely when the daemon has not named a directory. */
+.tile .spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+}
 
 .tile .thead {
   display: flex;

@@ -1,4 +1,4 @@
-import { esc, topbar, stateLabel, modeLabel, effortLabel, fmtDuration } from './helpers.js';
+import { esc, topbar, stateLabel, modeLabel, effortLabel, fmtDuration, projectColor } from './helpers.js';
 import { now } from '../clock.js';
 import { t } from '../i18n.js';
 
@@ -49,11 +49,21 @@ function tile(s, selected, state, off) {
   // The working mascot's gait comes from the session's effort level; only a
   // busy tile runs, and only a whitelisted level gets a class and a label.
   var eff = s.state === 'busy' ? effortLabel(s.effort) : null;
+  // Which project the session belongs to, as a stripe down the left edge. The
+  // two marks already on the tile are spoken for — the cap across the top is
+  // structural everywhere but ATTENTION, and the accent ring is the dial's
+  // cursor — so grouping takes an edge neither of them uses, and a tile can say
+  // "needs you", "you are here" and "this project" at once. Built from a number
+  // this file computed, never from daemon text, so the inline style is not a
+  // way into the markup.
+  var color = projectColor(s.project);
   return '<div class="tile state-' + s.state + (selected ? ' selected' : '') +
     (eff ? ' e-' + eff.toLowerCase() : '') +
     (off ? ' off' : '') +
     '" data-action="open" data-id="' + esc(s.id) + '">' +
     '<span class="cap"></span>' +
+    // After the cap, so the stripe owns the corner where they meet.
+    (color ? '<span class="spine" style="background:' + color + '"></span>' : '') +
     '<div class="thead"><span class="lamp ' + s.state + '"></span>' +
     '<span class="slabel">' + t('state.' + stateLabel(s.state, s.ended)) + '</span>' +
     modeChip(s.permissionMode) +
