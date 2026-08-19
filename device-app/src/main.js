@@ -15,6 +15,7 @@ import {
   questionsOf, currentQuestion, rowCount, startWalk, pressOptionAt, pressReviewAt, backStepAt,
 } from './answering.js';
 import { inflight } from './inflight.js';
+import { t, currentLang } from './i18n.js';
 
 var app = document.getElementById('app');
 var banner = document.getElementById('banner');
@@ -92,6 +93,7 @@ function render() {
     if (isList) marquee();
   }
   paintPending(state);
+  paintChrome();
   banner.className = state.daemonConnected ? 'banner' : 'banner show';
   // A blocked session is visible from every screen: the panel edge pulses warn
   // whenever anything waits. Suppressed on the queue and the prompt, where you
@@ -274,7 +276,7 @@ function toggleMascot() {
     if (on) window.localStorage.removeItem(MASCOT_KEY);
     else window.localStorage.setItem(MASCOT_KEY, '1');
   } catch (e) {}
-  toast(on ? 'SPRITE ON' : 'SPRITE OFF');
+  toast(t(on ? 'toast.spriteOn' : 'toast.spriteOff'));
 }
 
 // ---- the answer in flight --------------------------------------------------
@@ -302,6 +304,19 @@ function paintPending(state) {
   // it is counting down — one number, kept in one place.
   if (v.ms) pendingEl.querySelector('.pendarc').style.animationDuration = v.ms + 'ms';
   pendingEl.className = 'pending show ' + v.phase;
+}
+
+// The two pieces of text that live outside #app, in index.html: the offline
+// banner and the document language. No screen owns them, and the daemon can
+// change the language at any snapshot, so they are refreshed from here — only
+// when the language actually moved, which is at most once per session.
+var paintedLang = null;
+function paintChrome() {
+  var lang = currentLang();
+  if (lang === paintedLang) return;
+  paintedLang = lang;
+  banner.textContent = t('chrome.daemonOffline');
+  document.documentElement.lang = lang;
 }
 
 // ---- toast ---------------------------------------------------------------
@@ -464,7 +479,7 @@ onAction('deny', function () {
     // is dismissed without pretending an answer went anywhere.
     if (hero.expired) {
       store.resolveAsk(hero.id);
-      toast('DISMISSED');
+      toast(t('toast.dismissed'));
       return;
     }
     if (hero.kind === 'permission') answerFromQueue(hero, 1);
@@ -517,9 +532,9 @@ function toggleDiscoverable() {
     if (res && res.status === 'requested') {
       // optimistic — the bluetooth.discoverable event confirms or corrects
       store.update({ btDiscoverable: want });
-      toast(want ? 'PAIRING MODE ON' : 'PAIRING MODE OFF');
+      toast(t(want ? 'toast.pairingModeOn' : 'toast.pairingModeOff'));
     }
-  }).catch(function () { toast('FAILED'); });
+  }).catch(function () { toast(t('toast.failed')); });
 }
 
 // BT connects regularly outrun the 10s default request timeout, hence 30s.
@@ -536,19 +551,19 @@ function btAct(device, action) {
       .then(function (res) {
         store.update({ btBusy: null });
         var status = res && res.status;
-        if (status === 'connected') toast('CONNECTED');
-        else if (status === 'waiting_for_macos_connector' || status === 'waiting_for_android') toast('WAITING FOR PHONE');
-        else toast('CONNECT SENT');
+        if (status === 'connected') toast(t('toast.connected'));
+        else if (status === 'waiting_for_macos_connector' || status === 'waiting_for_android') toast(t('toast.waitingForPhone'));
+        else toast(t('toast.connectSent'));
       })
-      .catch(function () { store.update({ btBusy: null }); toast('CONNECT FAILED'); });
+      .catch(function () { store.update({ btBusy: null }); toast(t('toast.connectFailed')); });
     return;
   }
 
   if (action === 'DISCONNECT') {
     store.update({ btBusy: addr });
     ws.request('bluetooth.device.disconnect', { address: addr }, BT_CONNECT_TIMEOUT_MS)
-      .then(function () { store.update({ btBusy: null }); toast('DISCONNECTED'); })
-      .catch(function () { store.update({ btBusy: null }); toast('FAILED'); });
+      .then(function () { store.update({ btBusy: null }); toast(t('toast.disconnected')); })
+      .catch(function () { store.update({ btBusy: null }); toast(t('toast.failed')); });
     return;
   }
 
@@ -561,9 +576,9 @@ function btAct(device, action) {
           if (devices[i].address !== addr) next.push(devices[i]);
         }
         store.update({ btDevices: next, btIndex: Math.min(store.get().btIndex, next.length) });
-        toast('FORGOTTEN');
+        toast(t('toast.forgotten'));
       })
-      .catch(function () { toast('FAILED'); });
+      .catch(function () { toast(t('toast.failed')); });
   }
 }
 
@@ -641,7 +656,7 @@ function sendAnswer(ask, choice) {
           nextAskOrBack();
         }
       })
-      .catch(function () { clearSending(ask.id); toast('SEND FAILED'); });
+      .catch(function () { clearSending(ask.id); toast(t('toast.sendFailed')); });
     return;
   }
   var decision = choice === 0 ? 'allow' : 'deny';
@@ -649,9 +664,9 @@ function sendAnswer(ask, choice) {
   ws.request('claude.permission.answer', { requestId: ask.id, decision: decision })
     .then(function (res) {
       clearSending(ask.id);
-      if (!res.accepted) toast('ALREADY ANSWERED');
+      if (!res.accepted) toast(t('toast.alreadyAnswered'));
     })
-    .catch(function () { clearSending(ask.id); toast('SEND FAILED'); });
+    .catch(function () { clearSending(ask.id); toast(t('toast.sendFailed')); });
 }
 
 function markSending(ask) {
@@ -713,7 +728,7 @@ function allowHero(hero) {
 function applyStep(ask, step) {
   if (!step) return false;
   if (step.fields) store.update(step.fields);
-  if (step.incomplete) toast('ANSWER THIS ONE FIRST');
+  if (step.incomplete) toast(t('toast.answerThisFirst'));
   if (step.submit) answerFromQueue(ask, step.submit);
   return true;
 }
@@ -784,7 +799,7 @@ function restoreUndo() {
   fields.undo = null;
   fields.queueIndex = at;
   store.update(fields);
-  toast('RESTORED');
+  toast(t('toast.restored'));
   nav('#/queue');
   return true;
 }
@@ -792,7 +807,7 @@ function restoreUndo() {
 // A question can only be answered by typing into its terminal, so say exactly
 // how far we got: typed it, focused the window for you, or neither and why.
 function questionToast(ask, res, answers) {
-  if (res.viaKeyboard) return 'ANSWERED ON MAC';
+  if (res.viaKeyboard) return t('toast.answeredOnMac');
   var why = String(res.reason || '');
   if (res.focused) {
     // Naming the key only helps when there is exactly one to press. A group,
@@ -800,29 +815,29 @@ function questionToast(ask, res, answers) {
     // would be telling them to answer it wrong.
     var q = questionsOf(ask);
     var single = q.length === 1 && !q[0].multiSelect;
-    return single ? 'FOCUSED — PRESS ' + (answers[0][0] + 1) + ' ON MAC'
-      : 'FOCUSED — ANSWER ON MAC';
+    return single ? t('toast.focusedPress', { n: answers[0][0] + 1 })
+      : t('toast.focusedAnswer');
   }
   // The card outlived the daemon's copy of the ask — answered on the Mac, or
   // the daemon restarted under it. Not a failure to answer, and not something
   // pressing again fixes: the terminal owns it now.
-  if (/already resolved/i.test(why)) return 'GONE — ANSWER IN TERMINAL';
+  if (/already resolved/i.test(why)) return t('toast.gone');
   // The daemon read the dialog before typing and the choice was not on it, so it
   // typed nothing. Pressing again cannot help — whatever is up there now is not
   // what this card was drawn from.
-  if (/does not match/i.test(why)) return 'DIALOG CHANGED — ANSWER ON MAC';
+  if (/does not match/i.test(why)) return t('toast.dialogChanged');
   // Keys sent to a pane in copy mode scroll it instead of answering, so they
   // are not sent at all. One q on the Mac makes the card work again.
-  if (/copy mode/i.test(why)) return 'TMUX PANE IN COPY MODE — PRESS q';
-  if (/denied/i.test(why)) return 'ALLOW AUTOMATION IN MAC SETTINGS';
-  if (/background agent/i.test(why)) return 'BACKGROUND AGENT — NO WINDOW';
-  if (/registry|tty|no session|unknown session|identify the terminal/i.test(why)) return 'NO TERMINAL WINDOW FOUND';
-  return 'COULD NOT ANSWER';
+  if (/copy mode/i.test(why)) return t('toast.copyMode');
+  if (/denied/i.test(why)) return t('toast.automationDenied');
+  if (/background agent/i.test(why)) return t('toast.backgroundAgent');
+  if (/registry|tty|no session|unknown session|identify the terminal/i.test(why)) return t('toast.noTerminalWindow');
+  return t('toast.couldNotAnswer');
 }
 
 function skipAsk(id) {
   store.resolveAsk(id);
-  toast('LEFT FOR THE TERMINAL');
+  toast(t('toast.leftForTerminal'));
   nextAskOrBack();
 }
 
@@ -878,7 +893,7 @@ function surface(ask) {
   if (r.name === 'ask') return render();   // don't yank a live prompt; the counter updates
   if (r.name === 'ambient') {
     store.update({ queueIndex: indexOfAsk(ask.id) });
-    toast('NEEDS YOU');
+    toast(t('toast.needsYou'));
     returnTo = '#/list';
     nav('#/queue');
     return;
@@ -939,14 +954,15 @@ function onResolved(id, resolution) {
   // of clearing it like an answered prompt.
   if (resolution === 'timeout' && store.expireAsk(id)) {
     if (wasCurrent) {
-      toast('HOOK TIMED OUT — ANSWER IN TERMINAL');
+      toast(t('common.hookTimedOut'));
       render();
     }
     return;
   }
   store.resolveAsk(id);
   if (wasCurrent) {
-    toast(String(resolution).toUpperCase());
+    var known = t('resolution.' + resolution);
+    toast(known === 'resolution.' + resolution ? String(resolution).toUpperCase() : known);
     nextAskOrBack();
   }
 }
@@ -1005,7 +1021,7 @@ ws.on('bluetooth.pairing', function (d) {
   d = d || {};
   if (d.event === 'paired' || d.type === 'pairing_succeeded') {
     store.update({ btPairing: null });
-    toast('PAIRED');
+    toast(t('toast.paired'));
     refreshBtDevices();
   } else if (d.event === 'unpaired') {
     refreshBtDevices();
@@ -1017,7 +1033,7 @@ ws.on('bluetooth.agent', function (d) {
   if (d.type === 'bluetooth_pin') {
     store.update({ btPairing: { address: d.address, name: d.name, pin: d.pin } });
   } else if (d.event === 'cancel') {
-    if (store.get().btPairing) toast('PAIRING CANCELLED');
+    if (store.get().btPairing) toast(t('toast.pairingCancelled'));
     store.update({ btPairing: null });
   }
   // everything else (pin/passkey requests, authorization) is auto-handled

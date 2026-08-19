@@ -11,6 +11,8 @@
 // So the wait gets a face: one indicator that runs from the press until the
 // daemon says how it went. Pure so the phases can be tested without a browser.
 
+import { t } from './i18n.js';
+
 // The undo window is the one wait whose length is known up front, so its ring
 // drains rather than spins — the animation IS the countdown, which is also why
 // it is handed back as a duration for CSS to run rather than ticked in JS.
@@ -20,12 +22,16 @@ export function inflight(state, undoMs) {
       phase: 'sending',
       // Naming the machine matters: nothing on the device is doing this work,
       // and "typing" is literally what is happening over there.
-      label: state.sending.kind === 'question' ? 'TYPING ON MAC' : 'SENDING TO MAC',
+      label: t(state.sending.kind === 'question' ? 'inflight.typing' : 'inflight.sending'),
       ms: 0,
     };
   }
   if (state.undo) {
-    return { phase: 'undo', label: undoLabel(state.undo) + ' · BACK TO UNDO', ms: undoMs };
+    return {
+      phase: 'undo',
+      label: t('inflight.backToUndo', { label: undoLabel(state.undo) }),
+      ms: undoMs,
+    };
   }
   return null;
 }
@@ -33,7 +39,7 @@ export function inflight(state, undoMs) {
 // The verb the queue toast used to carry. It moved here because the indicator
 // now says it for as long as it is true, instead of for the 2.5s a toast lives.
 export function undoLabel(undo) {
-  if (!undo || !undo.ask) return 'ANSWERED';
-  if (undo.ask.kind === 'question') return 'ANSWERED';
-  return undo.choice === 0 ? 'ALLOW' : 'DENY';
+  if (!undo || !undo.ask) return t('inflight.answered');
+  if (undo.ask.kind === 'question') return t('inflight.answered');
+  return t(undo.choice === 0 ? 'inflight.allow' : 'inflight.deny');
 }

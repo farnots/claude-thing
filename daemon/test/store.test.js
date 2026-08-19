@@ -142,6 +142,9 @@ test('every snapshot carries the Mac epoch and UTC offset', () => {
   // Clock format rides along, already resolved — settings.test.js owns which
   // way it resolves; here it only has to be a boolean the device can branch on.
   assert.equal(typeof snap.clock24, 'boolean');
+  // Language the same: resolved on the Mac, and always one the device ships a
+  // catalog for, so it can index straight into it without defending itself.
+  assert.ok(['en', 'fr'].includes(snap.lang), `snapshot lang was ${snap.lang}`);
 });
 
 test('stats count busy and attention sessions', () => {

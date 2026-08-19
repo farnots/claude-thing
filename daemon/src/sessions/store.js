@@ -7,7 +7,7 @@ import {
   AGENT_ACTIVE_TTL_MS, THINKING_TTL_MS, DETAIL_DEBOUNCE_MS, SNAPSHOT_HEARTBEAT_MS,
 } from '../config.js';
 import { contextFraction } from '../context-window.js';
-import { resolveClock24 } from '../settings.js';
+import { resolveClock24, resolveLang } from '../settings.js';
 
 export function createStore() {
   const sessions = new Map(); // id -> internal record
@@ -139,6 +139,11 @@ export function createStore() {
       // Mac resolves the "auto" setting against its own locale here, so the
       // device only ever branches on a boolean.
       clock24: resolveClock24(),
+      // Fourth: which language this user reads. Same contract as clock24 — the
+      // Mac settles "auto" against its own preference and sends a language the
+      // device has a catalog for, never the rule. Two characters on a chunk
+      // budget the whole snapshot has to fit inside.
+      lang: resolveLang(),
       // Wire-hygiene probe, not data — clients must ignore its value except as
       // a transport check. The Mac connector's MsgPack packer used to coerce
       // NSNumber 0/1 to booleans; a device that receives intProbe === true
@@ -156,9 +161,12 @@ export function createStore() {
       snapshotTimer = null;
       const snap = snapshot();
       // serverNowMs is excluded from the key — it changes every time and would
-      // defeat the comparison; tzOffsetMin and clock24 stay in so a DST flip or
-      // a clock-format change still emits.
-      const key = JSON.stringify([snap.sessions, snap.stats, snap.tzOffsetMin, snap.clock24]);
+      // defeat the comparison; tzOffsetMin, clock24 and lang stay in so a DST
+      // flip, a clock-format change or a language change still emits. Leaving
+      // lang out would hold the device in the old language until the heartbeat.
+      const key = JSON.stringify([
+        snap.sessions, snap.stats, snap.tzOffsetMin, snap.clock24, snap.lang,
+      ]);
       const now = Date.now();
       if (key === lastSnapshotKey && now - lastSnapshotTs < SNAPSHOT_HEARTBEAT_MS) return;
       lastSnapshotKey = key;

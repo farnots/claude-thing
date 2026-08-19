@@ -145,6 +145,14 @@ end tell`;
 // which route a session takes, and — the part that used to be a bug — that the
 // non-tmux route never talks to Terminal unless it is really Terminal. Every one
 // of them defaults to the real thing, so index.js calls createFocus() bare.
+// NOT TRANSLATED, ON PURPOSE.
+//
+// Every `reason` this module returns is matched by English regex on the device —
+// questionToast() in device-app/src/main.js picks which toast to draw from it, so
+// "copy mode", "denied", "background agent" and the rest are error codes wearing
+// prose. Translating them would collapse every case into "COULD NOT ANSWER".
+// The device says these things in the user's language from its own catalog; this
+// side stays the wire format.
 export function createFocus({
   tmux = realTmux,
   sessionsDir = SESSIONS_DIR,

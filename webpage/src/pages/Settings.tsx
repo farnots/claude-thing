@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Card, PageHeader, StatusRow } from '../components/ui';
-import { useStatus, type ClockFormat } from '../hooks';
+import { useStatus, type ClockFormat, type Language } from '../hooks';
+import { useT, type Translate } from '../i18n';
 import { getApi, postApi } from '../ws';
 
 type Account = {
@@ -14,20 +15,32 @@ type Account = {
   nextPollMs?: number;
 };
 
-const CLOCK_CHOICES: { value: ClockFormat; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: '12', label: '12-hour' },
-  { value: '24', label: '24-hour' },
+const CLOCK_CHOICES: { value: ClockFormat; key: 'set.clock.auto' | 'set.clock.12' | 'set.clock.24' }[] = [
+  { value: 'auto', key: 'set.clock.auto' },
+  { value: '12', key: 'set.clock.12' },
+  { value: '24', key: 'set.clock.24' },
+];
+
+// Every language names itself in itself — a French speaker looking for their
+// language finds "Français", not "French".
+const LANG_CHOICES: { value: Language; key: 'set.lang.auto' | 'set.lang.en' | 'set.lang.fr' }[] = [
+  { value: 'auto', key: 'set.lang.auto' },
+  { value: 'en', key: 'set.lang.en' },
+  { value: 'fr', key: 'set.lang.fr' },
 ];
 
 export function Settings() {
   const { status, refresh } = useStatus([]);
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [clockBusy, setClockBusy] = useState(false);
+  const [langBusy, setLangBusy] = useState(false);
 
   const clockFormat = status?.settings?.clockFormat ?? 'auto';
   const clock24 = status?.settings?.clock24 ?? false;
+  const language = status?.settings?.language ?? 'auto';
+  const lang = status?.settings?.lang ?? 'en';
 
   async function setClockFormat(value: ClockFormat) {
     if (value === clockFormat) return;
@@ -36,9 +49,24 @@ export function Settings() {
       await postApi('/api/settings', { clockFormat: value });
       await refresh();
     } catch (e) {
-      setMsg(`clock format failed: ${(e as Error).message}`);
+      setMsg(t('set.clockFailed', { error: (e as Error).message }));
     } finally {
       setClockBusy(false);
+    }
+  }
+
+  // The daemon pushes a fresh snapshot on the same request, so the device flips
+  // in a frame; this page waits for its own /status poll to come back.
+  async function setLanguage(value: Language) {
+    if (value === language) return;
+    setLangBusy(true);
+    try {
+      await postApi('/api/settings', { language: value });
+      await refresh();
+    } catch (e) {
+      setMsg(t('set.langFailed', { error: (e as Error).message }));
+    } finally {
+      setLangBusy(false);
     }
   }
 
@@ -47,30 +75,33 @@ export function Settings() {
     setMsg(null);
     try {
       const out = await postApi(`/api/hooks/${action}`);
-      setMsg(out.output || `${action} complete`);
+      setMsg(out.output || t('set.actionComplete', { action }));
       await refresh();
     } catch (e) {
-      setMsg(`failed: ${(e as Error).message}`);
+      setMsg(t('set.actionFailed', { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
   }
 
+  const langName = t(lang === 'fr' ? 'set.lang.fr' : 'set.lang.en');
+
   return (
     <div>
-      <PageHeader title="Settings" subtitle="Claude Code integration and daemon configuration." />
+      <PageHeader title={t('set.title')} subtitle={t('set.subtitle')} />
 
-      <ClaudeAccounts />
+      <ClaudeAccounts t={t} />
 
       <Card className="mb-4">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Device</div>
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{t('set.section.device')}</div>
+
         <div className="flex items-center justify-between gap-4 py-2">
           <div>
-            <div className="text-sm text-fg">Clock format</div>
+            <div className="text-sm text-fg">{t('set.clockFormat')}</div>
             <p className="mt-1 text-xs text-muted">
               {clockFormat === 'auto'
-                ? `Auto follows this Mac's locale (currently ${clock24 ? '24-hour' : '12-hour'}).`
-                : `The device shows ${clock24 ? '14:05' : '2:05 PM'}, whatever this Mac's locale says.`}
+                ? t('set.clockAutoNote', { now: t(clock24 ? 'set.clock.24' : 'set.clock.12') })
+                : t('set.clockFixedNote', { sample: clock24 ? '14:05' : '2:05 PM' })}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -78,40 +109,54 @@ export function Settings() {
               <Button key={c.value}
                 variant={c.value === clockFormat ? 'default' : 'outline'}
                 disabled={clockBusy || !status}
-                onClick={() => setClockFormat(c.value)}>{c.label}</Button>
+                onClick={() => setClockFormat(c.value)}>{t(c.key)}</Button>
             ))}
           </div>
         </div>
-        <p className="mt-2 text-xs text-muted">
-          The Car Thing has no clock of its own — the daemon stamps every snapshot with this Mac's time,
-          timezone and clock format, so a change here lands on the device within a frame.
-        </p>
+        <p className="mt-2 text-xs text-muted">{t('set.clockFoot')}</p>
+
+        <div className="mt-4 flex items-center justify-between gap-4 border-t border-line py-2 pt-4">
+          <div>
+            <div className="text-sm text-fg">{t('set.language')}</div>
+            <p className="mt-1 text-xs text-muted">
+              {language === 'auto'
+                ? t('set.langAutoNote', { now: langName })
+                : t('set.langFixedNote', { now: langName })}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {LANG_CHOICES.map((c) => (
+              <Button key={c.value}
+                variant={c.value === language ? 'default' : 'outline'}
+                disabled={langBusy || !status}
+                onClick={() => setLanguage(c.value)}>{t(c.key)}</Button>
+            ))}
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-muted">{t('set.langFoot')}</p>
       </Card>
 
       <Card className="mb-4">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Claude Code hooks</div>
-        <StatusRow label="Hook status" value={status?.hooks ? 'installed' : 'not installed'}
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{t('set.section.hooks')}</div>
+        <StatusRow label={t('set.hookStatus')} value={t(status?.hooks ? 'set.hooksInstalled' : 'set.hooksNotInstalled')}
           tone={status?.hooks ? 'ok' : 'warn'}
-          hint="PermissionRequest, SessionStart/End, PreToolUse, PostToolUse, Stop, UserPromptSubmit" />
+          hint={t('set.hooksHint')} />
         <div className="mt-4 flex gap-2">
-          <Button onClick={() => run('install')} disabled={busy}>Install hooks</Button>
-          <Button variant="danger" onClick={() => run('uninstall')} disabled={busy}>Remove hooks</Button>
+          <Button onClick={() => run('install')} disabled={busy}>{t('set.installHooks')}</Button>
+          <Button variant="danger" onClick={() => run('uninstall')} disabled={busy}>{t('set.removeHooks')}</Button>
         </div>
         {msg && <pre className="mt-3 whitespace-pre-wrap rounded-lg bg-hover p-3 font-mono text-xs text-secondary">{msg}</pre>}
-        <p className="mt-3 text-xs text-muted">
-          A backup of ~/.claude/settings.json is written on every change. Hooks only affect Claude Code sessions
-          started afterwards, and a missing daemon never blocks Claude Code — prompts fall back to the terminal.
-        </p>
+        <p className="mt-3 text-xs text-muted">{t('set.hooksFoot')}</p>
       </Card>
 
       <Card>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Daemon</div>
-        <StatusRow label="Version" value={status ? `v${status.daemonVersion}` : '—'} tone={status ? 'ok' : 'off'} />
-        <StatusRow label="Port" value="127.0.0.1:8790" tone="ok" hint="loopback only" />
-        <StatusRow label="Permission hold" value="55s" tone="ok"
-          hint="after this the terminal prompt takes over — the device never auto-denies" />
-        <StatusRow label="Session cap on device" value="8 sessions" tone="ok"
-          hint="keeps a snapshot under the Bluetooth chunk budget" />
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{t('set.section.daemon')}</div>
+        <StatusRow label={t('set.version')} value={status ? `v${status.daemonVersion}` : '—'} tone={status ? 'ok' : 'off'} />
+        <StatusRow label={t('set.port')} value="127.0.0.1:8790" tone="ok" hint={t('set.portHint')} />
+        <StatusRow label={t('set.hold')} value="55s" tone="ok"
+          hint={t('set.holdHint')} />
+        <StatusRow label={t('set.sessionCap')} value={t('set.sessionCapValue')} tone="ok"
+          hint={t('set.sessionCapHint')} />
       </Card>
     </div>
   );
@@ -120,7 +165,7 @@ export function Settings() {
 // Which Claude accounts the usage screen measures. An account is a
 // CLAUDE_CONFIG_DIR, or the absence of one — those are different things, and the
 // blank field below means the absence, not ~/.claude.
-function ClaudeAccounts() {
+function ClaudeAccounts({ t }: { t: Translate }) {
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -132,7 +177,7 @@ function ClaudeAccounts() {
       setAccounts(out.accounts);
       setDirty(false);
     } catch (e) {
-      setMsg(`could not read accounts: ${(e as Error).message}`);
+      setMsg(t('set.accountsReadFailed', { error: (e as Error).message }));
     }
   }
 
@@ -154,9 +199,9 @@ function ClaudeAccounts() {
       });
       setAccounts(out.accounts);
       setDirty(false);
-      setMsg('saved — the next reading uses these');
+      setMsg(t('set.saved'));
     } catch (e) {
-      setMsg(`not saved: ${(e as Error).message}`);
+      setMsg(t('set.notSaved', { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -169,9 +214,9 @@ function ClaudeAccounts() {
       const out = await postApi('/api/usage/accounts/redetect');
       setAccounts(out.accounts);
       setDirty(false);
-      setMsg('rescanned — labels and disabled accounts were left alone');
+      setMsg(t('set.rescanned'));
     } catch (e) {
-      setMsg(`rescan failed: ${(e as Error).message}`);
+      setMsg(t('set.rescanFailed', { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -181,14 +226,12 @@ function ClaudeAccounts() {
 
   return (
     <Card className="mb-4">
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Claude accounts</div>
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">{t('set.section.accounts')}</div>
       <p className="mb-4 text-xs text-muted">
-        One usage column per account on the device. An account is a CLAUDE_CONFIG_DIR — leave it blank for the
-        machine default, which is not the same thing as <code className="font-mono">~/.claude</code>. Detected once
-        on first run; edits here stick.
+        {t('set.accountsIntro.before')}<code className="font-mono">~/.claude</code>{t('set.accountsIntro.after')}
       </p>
 
-      {!accounts && <div className="text-sm text-muted">reading…</div>}
+      {!accounts && <div className="text-sm text-muted">{t('set.accountsReading')}</div>}
 
       {accounts && accounts.map((a, i) => (
         <div key={a.id} className="flex items-center gap-3 border-b border-line py-3 last:border-0">
@@ -197,20 +240,20 @@ function ClaudeAccounts() {
             value={a.label}
             maxLength={12}
             onChange={(e) => edit(i, { label: e.target.value.toUpperCase().slice(0, 12) })}
-            aria-label={`label for ${a.id}`}
+            aria-label={t('set.accountLabelFor', { id: a.id })}
           />
           <div className="min-w-0 flex-1">
             <div className="truncate font-mono text-xs text-secondary">
-              {a.configDir || 'default — no CLAUDE_CONFIG_DIR'}
+              {a.configDir || t('set.accountDefault')}
             </div>
             <div className="mt-0.5 text-[11px] text-muted">
-              id <span className="font-mono">{a.id}</span>
-              {a.missing && <span className="text-warn"> · config dir not found, so it is not polled</span>}
+              {t('set.accountId')} <span className="font-mono">{a.id}</span>
+              {a.missing && <span className="text-warn">{t('set.accountMissing')}</span>}
               {!a.missing && a.failKind && (
                 <span className="text-warn">
-                  {' '}· last poll failed ({a.failKind})
+                  {t('set.accountFailed', { kind: a.failKind })}
                   {a.nextPollMs && a.nextPollMs > 60_000
-                    ? `, backed off to every ${Math.round(a.nextPollMs / 60_000)} min`
+                    ? t('set.accountBackoff', { min: Math.round(a.nextPollMs / 60_000) })
                     : ''}
                 </span>
               )}
@@ -220,16 +263,16 @@ function ClaudeAccounts() {
             variant={a.enabled ? 'outline' : 'default'}
             onClick={() => edit(i, { enabled: !a.enabled })}
           >
-            {a.enabled ? 'on' : 'off'}
+            {t(a.enabled ? 'set.on' : 'set.off')}
           </Button>
         </div>
       ))}
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button onClick={save} disabled={busy || !dirty || !accounts || enabled === 0}>Save</Button>
-        <Button variant="outline" onClick={redetect} disabled={busy}>Re-detect</Button>
+        <Button onClick={save} disabled={busy || !dirty || !accounts || enabled === 0}>{t('set.save')}</Button>
+        <Button variant="outline" onClick={redetect} disabled={busy}>{t('set.redetect')}</Button>
         {dirty && enabled === 0 && (
-          <span className="text-xs text-warn">at least one account has to stay on</span>
+          <span className="text-xs text-warn">{t('set.oneMustStayOn')}</span>
         )}
       </div>
 

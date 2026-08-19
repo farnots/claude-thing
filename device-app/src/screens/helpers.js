@@ -1,4 +1,5 @@
 import { fmtClock } from '../clock.js';
+import { t } from '../i18n.js';
 
 export function esc(s) {
   return String(s == null ? '' : s)
@@ -13,10 +14,13 @@ export function fmtTokens(n) {
   return String(n);
 }
 
+// Assembled from the catalog rather than glued together with suffixes: French
+// writes "35 min" and "1 h 35", which is not the same shape as "35m" and
+// "1h 35m". No Intl.RelativeTimeFormat to lean on — the target is Chrome 69.
 export function fmtDuration(ms) {
   var mins = Math.floor(ms / 60000);
-  if (mins < 60) return mins + 'm';
-  return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+  if (mins < 60) return t('unit.minutes', { m: mins });
+  return t('unit.hoursMinutes', { h: Math.floor(mins / 60), m: mins % 60 });
 }
 
 // Under 80% clear, 80-99% sweating, 100% fainted. The thresholds are the
@@ -39,6 +43,11 @@ export function usageReadings(u) {
   return [u];
 }
 
+// Returns a stable token, not the drawn text — the same contract modeLabel and
+// effortLabel below already had, and the reason all three survive translation:
+// callers draw t('state.' + token) and, where they need one, build a class name
+// out of the token itself. A translated token would produce class names like
+// .m-planification and stop matching styles.css.
 export function stateLabel(state, ended) {
   if (state === 'idle') return ended ? 'ENDED' : 'IDLE';
   return { busy: 'WORKING', attention: 'ATTENTION', celebrate: 'DONE' }[state] || 'IDLE';

@@ -1,4 +1,5 @@
 import { esc, topbar } from './helpers.js';
+import { t } from '../i18n.js';
 
 // Bluetooth management without leaving Claude mode. The daemon's bluetooth.*
 // RPCs are device-local and already on our socket, so this is pure UI: a
@@ -12,6 +13,10 @@ var WINDOW = 4;   // device rows visible under the toggle row
 // One source of truth for the submenu, shared with main.js and the tests.
 // FORGET is only reachable here: it needs two deliberate presses, because
 // forgetting the only paired phone should not be one accidental button.
+//
+// These are tokens, not labels: main.js dispatches btAct() on the value and the
+// menu marks FORGET as dangerous by comparing against it, so translating them
+// would break both. menu() below draws t('bt.' + token).
 export function btMenuActions(device) {
   return device && device.connected
     ? ['DISCONNECT', 'FORGET', 'CANCEL']
@@ -21,20 +26,20 @@ export function btMenuActions(device) {
 export function renderBluetooth(state) {
   var devices = state.btDevices || [];
   var cursor = state.btIndex || 0;
-  var bar = topbar('BLUETOOTH', state.daemonConnected,
+  var bar = topbar(t('bar.bluetooth'), state.daemonConnected,
     devices.length ? String(devices.length) : '');
 
   var toggle =
     '<div class="btrow bttoggle' + (cursor === 0 ? ' selected' : '') +
     '" data-action="bt-toggle">' +
-    '<span class="btname">PAIRING MODE</span>' +
+    '<span class="btname">' + t('bt.pairingMode') + '</span>' +
     '<span class="btpill' + (state.btDiscoverable ? ' on' : '') + '">' +
-    (state.btDiscoverable ? 'DISCOVERABLE' : 'OFF') + '</span></div>';
+    t(state.btDiscoverable ? 'bt.discoverable' : 'bt.off') + '</span></div>';
 
   var body = '';
   if (!devices.length) {
-    body = '<div class="btempty"><div class="btemptytitle">NO PAIRED DEVICES</div>' +
-      '<div class="btemptysub">enter pairing mode to add your phone</div></div>';
+    body = '<div class="btempty"><div class="btemptytitle">' + t('bt.empty.title') + '</div>' +
+      '<div class="btemptysub">' + t('bt.empty.sub') + '</div></div>';
   } else {
     // cursor space: 0 = toggle, 1..n = devices. The toggle row never scrolls
     // away; the device list windows around the cursor like the question options.
@@ -46,20 +51,20 @@ export function renderBluetooth(state) {
     }
     if (devices.length > WINDOW) {
       body += '<div class="btmore">' + (devCursor + 1) + ' / ' + devices.length +
-        ' · turn dial for more</div>';
+        t('common.turnDialForMore') + '</div>';
     }
   }
 
   return '<div class="screen">' + bar +
     '<div class="btwrap">' + toggle + body + '</div>' +
-    '<div class="bthint">dial moves · press for actions · back leaves</div>' +
+    '<div class="bthint">' + t('bt.hint') + '</div>' +
     menu(state, devices) +
     '</div>';
 }
 
 function deviceRow(d, selected, busy) {
-  var status = busy === d.address ? 'WORKING…'
-    : d.connected ? 'CONNECTED' : 'PAIRED';
+  var status = t(busy === d.address ? 'bt.working'
+    : d.connected ? 'bt.connected' : 'bt.paired');
   return '<div class="btrow' + (selected ? ' selected' : '') +
     '" data-action="bt-device" data-id="' + esc(d.address) + '">' +
     '<span class="btlamp' + (d.connected ? ' on' : '') + '"></span>' +
@@ -82,7 +87,7 @@ function menu(state, devices) {
   for (var j = 0; j < actions.length; j++) {
     rows += '<div class="btact' + (j === state.btMenuIndex ? ' selected' : '') +
       (actions[j] === 'FORGET' ? ' danger' : '') +
-      '" data-action="bt-menu-act" data-id="' + j + '">' + actions[j] + '</div>';
+      '" data-action="bt-menu-act" data-id="' + j + '">' + t('bt.' + actions[j]) + '</div>';
   }
   return '<div class="btmenuwrap"><div class="btmenu">' +
     '<div class="btmenutitle">' + esc(device.name || device.address) + '</div>' +
@@ -94,9 +99,9 @@ function menu(state, devices) {
 export function renderBtPairing(p) {
   return '<div class="perm btpair"><span class="hazard"></span>' +
     '<div class="head"><span class="lamp attention"></span>' +
-    '<span class="who">PAIRING REQUEST</span></div>' +
+    '<span class="who">' + t('bt.pairingRequest') + '</span></div>' +
     '<div class="session">' + esc(p.name || p.address) + '</div>' +
     '<div class="btpin">' + esc(p.pin || '') + '</div>' +
-    '<div class="btpairnote">confirm this code on your phone — auto-accepting</div>' +
-    '<div class="qhint">back dismisses</div></div>';
+    '<div class="btpairnote">' + t('bt.pairingNote') + '</div>' +
+    '<div class="qhint">' + t('bt.backDismisses') + '</div></div>';
 }

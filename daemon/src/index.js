@@ -10,6 +10,7 @@ import { createHttpServer } from './http-server.js';
 import { createFocus } from './focus.js';
 import { createQueue } from './queue.js';
 import { createUsage } from './usage.js';
+import { resolveLang } from './settings.js';
 import { log } from './log.js';
 
 // Broadcast the whole waiting list whenever a client turns up, so a screen that
@@ -19,9 +20,9 @@ import { log } from './log.js';
 const hub = createHub({ onHello: () => hub.emit('claude.queue.sync', queueSnapshot()) });
 const store = createStore();
 const focus = createFocus();
-const queue = createQueue({ emit: hub.emit, store, focus });
-const permissionBridge = createPermissionBridge({ emit: hub.emit, store, queue });
-const usage = createUsage({ emit: hub.emit });
+const queue = createQueue({ emit: hub.emit, store, focus, lang: resolveLang });
+const permissionBridge = createPermissionBridge({ emit: hub.emit, store, queue, lang: resolveLang });
+const usage = createUsage({ emit: hub.emit, lang: resolveLang });
 const sources = createSources({ store, permissionBridge, queue });
 
 function queueSnapshot() {

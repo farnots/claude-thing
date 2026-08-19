@@ -1,5 +1,6 @@
 import { esc, topbar, stateLabel, modeLabel, effortLabel, fmtDuration } from './helpers.js';
 import { now } from '../clock.js';
+import { t } from '../i18n.js';
 
 // Sideways-scrolling grid: two rows, columns flow to the right without limit.
 // The dial walks sessions in column-major order and the track slides so the
@@ -13,8 +14,8 @@ var scrollCol = 0;   // leftmost visible column
 export function renderList(state) {
   if (!state.sessions.length) {
     scrollCol = 0;
-    return '<div class="screen">' + topbar('SESSIONS', state.daemonConnected) +
-      '<div class="empty">NO SESSIONS — START CLAUDE ON YOUR MAC</div></div>';
+    return '<div class="screen">' + topbar(t('bar.sessions'), state.daemonConnected) +
+      '<div class="empty">' + t('list.empty') + '</div></div>';
   }
 
   var totalCols = Math.ceil(state.sessions.length / ROWS);
@@ -39,7 +40,7 @@ export function renderList(state) {
   // No scrollbar: the next column's edge peeking past the right bezel is the
   // affordance (see .gridwrap), and it costs no vertical space on a 480px panel.
   return '<div class="screen">' +
-    topbar('SESSIONS', state.daemonConnected, String(state.sessions.length)) +
+    topbar(t('bar.sessions'), state.daemonConnected, String(state.sessions.length)) +
     '<div class="gridwrap"><div class="gridtrack" style="transform:translateX(-' + offset + 'px)">' +
     tiles + '</div></div></div>';
 }
@@ -54,14 +55,14 @@ function tile(s, selected, state, off) {
     '" data-action="open" data-id="' + esc(s.id) + '">' +
     '<span class="cap"></span>' +
     '<div class="thead"><span class="lamp ' + s.state + '"></span>' +
-    '<span class="slabel">' + stateLabel(s.state, s.ended) + '</span>' +
+    '<span class="slabel">' + t('state.' + stateLabel(s.state, s.ended)) + '</span>' +
     modeChip(s.permissionMode) +
     (s.pendingPermission ? '<span class="badge">!</span>' : '') + '</div>' +
     // The name is measured after paint and only marquees if it actually
     // overflows; see marquee() in main.js.
     '<div class="tname"><span class="tnamei" data-marquee="1">' + esc(s.name) + '</span></div>' +
     '<div class="tsub">' + esc(subline(s, state)) + '</div>' +
-    meterBlock(s, eff) +
+    meterBlock(s, eff ? t('effort.' + eff) : null) +
     '<span class="sprite"></span>' +
     '</div>';
 }
@@ -71,9 +72,11 @@ function tile(s, selected, state, off) {
 // label is safe to build a class name out of; an unknown mode draws nothing
 // rather than a badge saying something the daemon never claimed.
 function modeChip(mode) {
-  var label = modeLabel(mode);
-  if (!label) return '';
-  return '<span class="mode m-' + label.toLowerCase() + '">' + label + '</span>';
+  var token = modeLabel(mode);
+  if (!token) return '';
+  // The token names the class, the catalog draws the word. Translating the token
+  // would give .m-planification, which styles.css knows nothing about.
+  return '<span class="mode m-' + token.toLowerCase() + '">' + t('mode.' + token) + '</span>';
 }
 
 // The tile's bottom-left block: model and effort merged into one spec line,
@@ -101,7 +104,7 @@ function meterBlock(s, eff) {
     // flips ink at the exact pixel the fill passes it — a single per-span
     // threshold left the word fill-on-fill while the bar was partway under it,
     // and hid where the fill actually ended.
-    var label = '<span class="ctxword">CONTEXT</span>' +
+    var label = '<span class="ctxword">' + t('list.context') + '</span>' +
       '<span class="ctxnum">' + Math.round(pct * 100) + '%</span>';
     html += '<div class="ctxtrack">' +
       '<span class="ctxtext">' + label + '</span>' +
@@ -114,11 +117,13 @@ function meterBlock(s, eff) {
 
 function subline(s, state) {
   var d = state.details[s.id];
-  if (s.pendingPermission) return 'needs your answer';
+  if (s.pendingPermission) return t('list.needsAnswer');
   if (d && d.currentTool) return d.currentTool + ' · ' + (d.lastMessage || '');
   if (s.state === 'celebrate' && s.lastActivityTs) {
-    return 'finished ' + fmtDuration(now() - s.lastActivityTs) + ' ago';
+    // The duration moves inside the sentence in French — "terminé il y a 5 min" —
+    // so the whole line is one catalog entry rather than three glued fragments.
+    return t('list.finishedAgo', { d: fmtDuration(now() - s.lastActivityTs) });
   }
   if (d && d.lastMessage) return d.lastMessage;
-  return s.state === 'busy' ? 'working…' : '';
+  return s.state === 'busy' ? t('list.working') : '';
 }

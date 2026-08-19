@@ -27,6 +27,7 @@ import {
 import { parseResetAt } from './usage-reset.js';
 import { readState, writeState } from './persist.js';
 import { log } from './log.js';
+import { t } from './i18n.js';
 
 // Where the last good reading is kept between runs.
 const STATE_NAME = 'usage';
@@ -65,18 +66,25 @@ function parseTopList(rest) {
   }).filter((x) => x.name);
 }
 
-function labelFor(kind) {
+// `lang` defaults to English everywhere it appears in this file: every formatter
+// here is pure and tested as such, and a default argument keeps the tests — and
+// any caller that has no preference to pass — exactly as they were.
+function labelFor(kind, lang) {
   const k = kind.toLowerCase();
-  if (k === 'session') return 'SESSION';
+  if (k === 'session') return t(lang, 'usage.session');
   const model = /week\s*\(([^)]+)\)/i.exec(kind);
   if (model) {
     const name = model[1].trim();
-    return /all models/i.test(name) ? 'WEEK · ALL MODELS' : `WEEK · ${name.toUpperCase()}`;
+    return /all models/i.test(name)
+      ? t(lang, 'usage.weekAll')
+      : t(lang, 'usage.week', { name: name.toUpperCase() });
   }
+  // Not a shape we recognize: the CLI's own word, upper-cased. Nothing to
+  // translate — we do not know what it says.
   return kind.toUpperCase();
 }
 
-export function parseUsage(text, now = Date.now()) {
+export function parseUsage(text, now = Date.now(), lang = 'en') {
   const lines = String(text).split('\n');
   const limits = [];
   const windows = [];
@@ -100,9 +108,13 @@ export function parseUsage(text, now = Date.now()) {
       const resetsAt = limit[3] ? parseResetAt(limit[3], limit[4], now) : 0;
       limits.push({
         key: limit[1].toLowerCase().replace(/[^a-z]+/g, '-'),
-        label: labelFor(limit[1]),
+        label: labelFor(limit[1], lang),
         used: Number(limit[2]) / 100,
-        detail: limit[3] ? `resets ${limit[3].trim()}` : '',
+        // The time inside is the CLI's own output ("Jul 30 at 5:19am"), so a
+        // French label carries an English stamp. Re-formatting it would mean
+        // owning a date format, and the device has no clock to own it with —
+        // which is also why resetsAt, resolved to an instant, rides beside it.
+        detail: limit[3] ? t(lang, 'usage.resets', { at: limit[3].trim() }) : '',
         ...(resetsAt ? { resetsAt } : {}),
       });
       continue;
@@ -111,7 +123,7 @@ export function parseUsage(text, now = Date.now()) {
     const win = WINDOW_RE.exec(line);
     if (win) {
       current = {
-        window: `Last ${win[1]}`,
+        window: t(lang, 'usage.window', { win: win[1] }),
         requests: Number(win[2].replace(/,/g, '')),
         sessions: Number(win[3].replace(/,/g, '')),
         notes: [],
@@ -155,7 +167,7 @@ export function parseUsage(text, now = Date.now()) {
     // When the limits were last actually read, as opposed to when this reading
     // was taken. They diverge as soon as one is carried over.
     limitsTs: limits.length ? now : 0,
-    updatedLabel: 'updated ' + hhmm(now) + ' · from claude /usage',
+    updatedLabel: t(lang, 'usage.updated', { at: hhmm(now) }),
     subscription,
     limits,
     windows,
@@ -219,7 +231,7 @@ function sameWindow(prev, next) {
   return prev.detail === next.detail;
 }
 
-export function reconcileUsage(prev, next) {
+export function reconcileUsage(prev, next, lang = 'en') {
   if (!next || !Array.isArray(next.limits)) return next;
 
   // Silence about the limits is not a report that they are gone. A reading that
@@ -236,7 +248,7 @@ export function reconcileUsage(prev, next) {
       limits: held,
       limitsTs,
       stale: true,
-      updatedLabel: 'limits ' + hhmm(limitsTs) + ' · from claude /usage',
+      updatedLabel: t(lang, 'usage.limits', { at: hhmm(limitsTs) }),
     };
   }
 
@@ -281,15 +293,17 @@ export function reconcileUsage(prev, next) {
 // What actually went wrong, in the words the device has room for. A killed run
 // timed out — say that, rather than quoting whichever line stderr happened to
 // end on, which is how warnings get mistaken for causes.
-export function describeFailure(err, stderr) {
+export function describeFailure(err, stderr, lang = 'en') {
   if (err && (err.killed || err.signal)) {
-    return `timed out after ${Math.round(RUN_TIMEOUT_MS / 1000)}s`;
+    return t(lang, 'usage.timedOut', { n: Math.round(RUN_TIMEOUT_MS / 1000) });
   }
   const line = String(stderr || '')
     .split('\n')
     .map((l) => l.trim())
     .find((l) => l && !/^warning:/i.test(l));
-  return line || String((err && err.message) || 'unknown error').split('\n')[0];
+  // A stderr line is the tool's own words quoted back, not our copy: it stays
+  // in whatever language the tool printed it.
+  return line || String((err && err.message) || t(lang, 'usage.unknownError')).split('\n')[0];
 }
 
 // ---- accounts on the wire ----------------------------------------------------
@@ -298,7 +312,11 @@ export function describeFailure(err, stderr) {
 // (or null). Keeping it a parameter rather than a closure is what lets every
 // function below stay pure and be tested without booting anything.
 
-const NOT_READ = { limits: [], error: 'usage not read yet' };
+// A known account with no reading at all. Says which of "not yet" and "failed"
+// it is, so the screen does not sit on READING USAGE… forever.
+function notRead(lang) {
+  return { limits: [], error: t(lang, 'usage.notRead') };
+}
 
 // Same rule slimUsage follows, applied one level down: carry what the screen
 // draws. `columns` says the receiver will draw two columns, which happens from
@@ -308,8 +326,8 @@ const NOT_READ = { limits: [], error: 'usage not read yet' };
 // that is exactly the difference between two accounts fitting one synchronous
 // response (1449 bytes) and not (2101). With a single account the screen keeps
 // the full layout, tables included, so nothing is dropped there.
-export function slimAccount(account, u, columns = false) {
-  const slim = slimUsage(u) || NOT_READ;
+export function slimAccount(account, u, columns = false, lang = 'en') {
+  const slim = slimUsage(u) || notRead(lang);
   const out = { ...slim, id: account.id, label: account.label };
   if (!columns) return out;
   const first = (slim.windows || [])[0];
@@ -353,7 +371,7 @@ export function orderForWire(accounts, states) {
 // client reads) or the array (what a new one reads), never both. The event
 // carries both, because events chunk.
 export function multiUsage(accounts, states, {
-  cap = 0, slim = true, withMirror = true, withAccounts = true,
+  cap = 0, slim = true, withMirror = true, withAccounts = true, lang = 'en',
 } = {}) {
   const order = orderForWire(accounts, states);
   const primary = order[0] || null;
@@ -361,7 +379,7 @@ export function multiUsage(accounts, states, {
 
   if (withMirror) {
     const u = primary ? states.get(primary.id) : null;
-    Object.assign(out, (slim ? slimUsage(u) : u) || NOT_READ);
+    Object.assign(out, (slim ? slimUsage(u) : u) || notRead(lang));
   }
   out.accountId = primary ? primary.id : '';
   out.accountCount = order.length;
@@ -371,8 +389,8 @@ export function multiUsage(accounts, states, {
     // Narrowed only when there is more than one to draw — see slimAccount.
     const columns = carried.length > 1;
     out.accounts = carried.map((a) => (
-      slim ? slimAccount(a, states.get(a.id), columns)
-           : { id: a.id, label: a.label, ...(states.get(a.id) || NOT_READ) }
+      slim ? slimAccount(a, states.get(a.id), columns, lang)
+           : { id: a.id, label: a.label, ...(states.get(a.id) || notRead(lang)) }
     ));
   }
   return out;
@@ -415,7 +433,7 @@ export function scheduleFor(accounts, refreshMs) {
 
 // The last good reading, so a restart shows real figures instead of spending a
 // minute on "READING USAGE…". Flagged stale until the first live poll lands.
-function labelPersisted(saved) {
+function labelPersisted(saved, lang = 'en') {
   if (!saved || !Array.isArray(saved.limits) || !saved.limits.length) return null;
   // Dated by when the limits were read, which after a carry-over is older than
   // the reading that saved them.
@@ -425,11 +443,11 @@ function labelPersisted(saved) {
     ...saved,
     stale: true,
     error: undefined,
-    updatedLabel: `last reading${at ? ' ' + at : ''} · from claude /usage`,
+    updatedLabel: t(lang, 'usage.lastReading', { at: at ? ' ' + at : '' }),
   };
 }
 
-function loadPersistedMap(list) {
+function loadPersistedMap(list, lang) {
   const out = new Map(list.map((a) => [a.id, null]));
   const saved = readState(STATE_NAME);
   if (!saved) return out;
@@ -438,7 +456,7 @@ function loadPersistedMap(list) {
   // ignored rather than deleted — an account disabled today may come back, and
   // its figures are still the last true thing we knew about it.
   if (saved.accounts && typeof saved.accounts === 'object' && !Array.isArray(saved.accounts)) {
-    for (const a of list) out.set(a.id, labelPersisted(saved.accounts[a.id]));
+    for (const a of list) out.set(a.id, labelPersisted(saved.accounts[a.id], lang));
     return out;
   }
 
@@ -446,13 +464,18 @@ function loadPersistedMap(list) {
   // account its own environment happened to name — and that is information no
   // migration can recover. Attributing it to the first declared account invents
   // nothing about the others, and the first poll of each supersedes it anyway.
-  if (Array.isArray(saved.limits) && list.length) out.set(list[0].id, labelPersisted(saved));
+  if (Array.isArray(saved.limits) && list.length) out.set(list[0].id, labelPersisted(saved, lang));
   return out;
 }
 
 // ---- the poller --------------------------------------------------------------
 
-export function createUsage({ emit, accounts, runUsage, home } = {}) {
+// `lang` is a getter, not a value: the user can change the language while the
+// daemon runs, and every other injected dependency here is read at use time too.
+// Injected rather than imported from settings.js so this module keeps knowing
+// nothing about where preferences live — which is what lets the tests run in
+// English on a Mac set to anything.
+export function createUsage({ emit, accounts, runUsage, home, lang = () => 'en' } = {}) {
   let list = [];
   const slots = new Map();
 
@@ -464,7 +487,7 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
 
   function install(next) {
     list = next;
-    const saved = loadPersistedMap(list);
+    const saved = loadPersistedMap(list, lang());
     for (const a of list) {
       const prev = slots.get(a.id);
       // A surviving account keeps the reading it already has: re-reading it off
@@ -524,7 +547,7 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
           stdio: ['ignore', 'pipe', 'pipe'],
         },
         (err, stdout, stderr) => {
-          if (err) return resolve({ error: describeFailure(err, stderr) });
+          if (err) return resolve({ error: describeFailure(err, stderr, lang()) });
           resolve({ text: String(stdout) });
         }
       );
@@ -538,6 +561,12 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
     if (!slot) return null;
     if (slot.running) return slot.latest;
 
+    // Read once per poll, not once per label: every string this poll produces is
+    // in one language, and a change mid-poll would otherwise split a reading
+    // across two. The settings handler triggers a refresh on a language change
+    // so the screen does not wait out the 60s window to catch up.
+    const locale = lang();
+
     // Not polled at all. A run against a directory that is not there burns the
     // full timeout to tell us what one existsSync already said, and does it once
     // a minute forever. Re-checked every tick, so a restored directory heals
@@ -547,7 +576,7 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
         ...(slot.latest || {}),
         limits: (slot.latest && slot.latest.limits) || [],
         stale: true,
-        error: `config dir missing: ${slot.account.configDir}`,
+        error: t(locale, 'usage.configMissing', { dir: slot.account.configDir }),
       };
       slot.failKind = 'config';
       slot.failStreak = USAGE_BACKOFF_AFTER;
@@ -561,17 +590,17 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
         slot.latest = {
           ...(slot.latest || {}),
           stale: true,
-          error: `claude /usage failed: ${out.error}`.slice(0, 120),
+          error: t(locale, 'usage.runFailed', { why: out.error }).slice(0, 120),
         };
         const kind = classifyFailure(out.error);
         slot.failKind = kind;
         slot.failStreak = (kind === 'config' || kind === 'auth') ? slot.failStreak + 1 : 0;
       } else {
-        const parsed = parseUsage(out.text);
+        const parsed = parseUsage(out.text, Date.now(), locale);
         if (parsed) {
           slot.failStreak = 0;
           slot.failKind = null;
-          slot.latest = reconcileUsage(slot.latest, parsed);
+          slot.latest = reconcileUsage(slot.latest, parsed, locale);
           // Nothing to carry and nothing read: say which of the two it is,
           // rather than leaving the screen on "READING USAGE…" forever.
           //
@@ -583,9 +612,9 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
             slot.persisted = slot.latest;
             persistAll();
           }
-          else slot.latest = { ...slot.latest, stale: true, error: 'claude /usage printed no limits' };
+          else slot.latest = { ...slot.latest, stale: true, error: t(locale, 'usage.noLimits') };
         } else {
-          slot.latest = { ...(slot.latest || {}), stale: true, error: 'could not parse /usage output' };
+          slot.latest = { ...(slot.latest || {}), stale: true, error: t(locale, 'usage.parseFailed') };
         }
       }
     } catch (err) {
@@ -601,7 +630,7 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
   // so two frames on this topic inside its 200ms window supersede each other;
   // that is lossless only while each frame is a complete snapshot.
   function announce() {
-    if (emit) emit('claude.usage.update', multiUsage(list, states()));
+    if (emit) emit('claude.usage.update', multiUsage(list, states(), { lang: lang() }));
   }
 
   async function tick(id) {
@@ -662,13 +691,13 @@ export function createUsage({ emit, accounts, runUsage, home } = {}) {
       if (!target) throw new Error('unknown account');
       const u = st.get(target.id);
       return {
-        ...((slim ? slimUsage(u) : u) || NOT_READ),
+        ...((slim ? slimUsage(u) : u) || notRead(lang())),
         accountId: target.id,
         accountCount: list.filter((a) => a.enabled).length,
       };
     },
 
-    all: (opts = {}) => multiUsage(list, states(), { withMirror: false, ...opts }),
+    all: (opts = {}) => multiUsage(list, states(), { lang: lang(), withMirror: false, ...opts }),
 
     accounts: () => list.map((a) => {
       const slot = slots.get(a.id);

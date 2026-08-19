@@ -1,5 +1,6 @@
 import { esc, isDestructive } from './helpers.js';
 import { now } from '../clock.js';
+import { t } from '../i18n.js';
 
 // Fullscreen prompt view — the focused answer screen for a permission, opened
 // from a session or from the queue. Unlike the queue this one keeps a
@@ -21,7 +22,7 @@ function head(ask, label, klass) {
     '<span class="who">' + label + '</span>' +
     remaining(ask) +
     (queue ? '<span class="queuen">' + queue + '</span>' : '') + '</div>' +
-    '<div class="session">' + esc(ask.sessionName || 'session') +
+    '<div class="session">' + esc(ask.sessionName || t('common.session')) +
     (ask.kind === 'permission' && ask.tool
       ? '<span class="stool">' + esc(ask.tool) + '</span>' : '') +
     '</div>';
@@ -45,7 +46,9 @@ function remaining(ask) {
   var frac = fractionLeft(ask);
   if (frac === null) return '';
   var secs = Math.max(0, Math.round((ask.createdTs + ask.timeoutMs - now()) / 1000));
-  var text = secs >= 60 ? Math.round(secs / 60) + 'm left' : secs + 's left';
+  var text = secs >= 60
+    ? t('ask.leftMinutes', { m: Math.round(secs / 60) })
+    : t('ask.leftSeconds', { s: secs });
   return '<span class="cdtime' + (secs <= 10 ? ' urgent' : '') + '">' + text + '</span>';
 }
 
@@ -63,12 +66,12 @@ function renderPermissionAsk(state, ask, choice) {
   // spent, so allow/deny would write to a closed connection. Say where the
   // decision went and offer only dismissal.
   if (ask.expired) {
-    return '<div class="perm expired">' + head(ask, 'PERMISSION REQUEST') +
+    return '<div class="perm expired">' + head(ask, t('queue.permission')) +
       '<div class="cmd">' + esc(ask.summary) + '</div>' +
-      '<div class="expnote">HOOK TIMED OUT — ANSWER IN TERMINAL</div>' +
+      '<div class="expnote">' + t('common.hookTimedOut') + '</div>' +
       '<div class="actions">' +
       '<div class="pbtn dismiss selected" data-action="ask-skip">' +
-      '<span class="a">DISMISS</span><span class="h">back</span></div>' +
+      '<span class="a">' + t('ask.dismiss') + '</span><span class="h">' + t('common.back') + '</span></div>' +
       '</div></div>';
   }
   // The prompt screen honours the same two-press contract as the queue hero:
@@ -76,10 +79,10 @@ function renderPermissionAsk(state, ask, choice) {
   // the first press instead of firing.
   var nasty = isDestructive(ask);
   var armed = !!(state.armed && state.armed.id === ask.id);
-  var kind = nasty ? 'PERMISSION REQUEST · DESTRUCTIVE' : 'PERMISSION REQUEST';
-  var allowLabel = armed ? 'PRESS AGAIN' : 'ALLOW';
-  var allowHint = armed ? 'this cannot be undone'
-    : nasty ? 'press twice · destructive' : 'press dial';
+  var kind = t(nasty ? 'queue.permissionDestructive' : 'queue.permission');
+  var allowLabel = t(armed ? 'queue.pressAgain' : 'queue.allow');
+  var allowHint = armed ? t('queue.cannotUndo')
+    : nasty ? t('queue.pressTwice') : t('common.pressDial');
   return '<div class="perm' + (nasty ? ' destructive' : '') + '">' + head(ask, kind) +
     '<div class="cmd">' + esc(ask.summary) + '</div>' +
     '<div class="actions">' +
@@ -87,9 +90,9 @@ function renderPermissionAsk(state, ask, choice) {
     '" data-action="ask-choice" data-id="0">' +
     '<span class="a">' + allowLabel + '</span><span class="h">' + esc(allowHint) + '</span></div>' +
     '<div class="pbtn deny' + (choice === 1 ? ' selected' : '') + '" data-action="ask-choice" data-id="1">' +
-    '<span class="a">DENY</span><span class="h">preset 4</span></div>' +
+    '<span class="a">' + t('queue.deny') + '</span><span class="h">' + t('common.preset4') + '</span></div>' +
     '<div class="pbtn dismiss' + (choice === 2 ? ' selected' : '') + '" data-action="ask-skip">' +
-    '<span class="a">SKIP</span><span class="h">back</span></div>' +
+    '<span class="a">' + t('ask.skip') + '</span><span class="h">' + t('common.back') + '</span></div>' +
     '</div></div>';
 }
 
