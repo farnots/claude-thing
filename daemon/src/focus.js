@@ -1,19 +1,28 @@
-// Bring a session's terminal window to the front, as if the user clicked it.
+// Point the keyboard at a session's terminal, as if the user had clicked it.
 //
-// Chain: session_id → ~/.claude/sessions/<pid>.json → pid → tty → Terminal.app
-// tab. Terminal.app is the only mainstream emulator that exposes `tty` on its
-// tabs, so other emulators fall back to raising the app.
+// Two routes, and tmux is the good one:
 //
-// Permissions: raising Terminal needs Automation → Terminal. Typing a keystroke
-// additionally needs Automation → System Events, which macOS may deny. When it
-// is denied we say so and stop — the window is focused, and the user finishes
-// on the keyboard. We never try to work around a denied permission.
+//   • tmux — session_id → registry → pid → tty → the pane with that pane_tty.
+//     Keys go in with `send-keys`, which writes to the pane's pty: no macOS
+//     Automation permission, no window brought forward, and it works on a
+//     detached session. See tmux.js.
+//
+//   • no tmux — session_id → pid → tty → Terminal.app tab. Terminal.app is the
+//     only mainstream emulator that exposes `tty` on its tabs, so other
+//     emulators fall back to raising the app and the human presses the key.
+//
+// Permissions, on that second route only: raising Terminal needs Automation →
+// Terminal. Typing a keystroke additionally needs Automation → System Events,
+// which macOS may deny. When it is denied we say so and stop — the window is
+// focused, and the user finishes on the keyboard. We never try to work around a
+// denied permission.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { CLAUDE_DIR } from './config.js';
+import { tmux as realTmux } from './tmux.js';
 import { log } from './log.js';
 
 const SESSIONS_DIR = path.join(CLAUDE_DIR, 'sessions');
@@ -132,7 +141,17 @@ tell application "Terminal"
   return matched
 end tell`;
 
-export function createFocus() {
+// The seams exist so the routing above can be tested without a Mac in the loop:
+// which route a session takes, and — the part that used to be a bug — that the
+// non-tmux route never talks to Terminal unless it is really Terminal. Every one
+// of them defaults to the real thing, so index.js calls createFocus() bare.
+export function createFocus({
+  tmux = realTmux,
+  sessionsDir = SESSIONS_DIR,
+  ttyFor: ttyOf = ttyFor,
+  ownerApp: appOf = ownerApp,
+  osa: osascript = osa,
+} = {}) {
   let automationDenied = false;   // sticky: a denied TCC row never re-prompts
 
   // There is one keyboard and one frontmost window, so there can be one of
@@ -153,38 +172,79 @@ export function createFocus() {
     return run;
   }
 
-  async function focusSession(sessionId) {
-    const rec = lookupSession(sessionId);
-    if (!rec) return { focused: false, reason: 'no session registry entry' };
+  // Which process's terminal a session is answered through, and the tty it is
+  // on. A background job borrows the window that parked on it, if one did —
+  // focusSession and paneForSession must agree on that, hence one place for it.
+  async function targetFor(sessionId) {
+    const rec = lookupSession(sessionId, sessionsDir);
+    if (!rec) return { reason: 'no session registry entry' };
 
-    // A background job borrows the window that parked on it, if one did.
     let target = rec;
     let viaHost = false;
     if (rec.kind && rec.kind !== 'interactive') {
-      const host = hostWindowFor(rec);
-      if (!host) return { focused: false, reason: 'background agent — no window to focus' };
+      const host = hostWindowFor(rec, sessionsDir);
+      if (!host) return { reason: 'background agent — no window to focus' };
       target = host;
       viaHost = true;
     }
 
-    const tty = await ttyFor(target.pid);
+    const tty = await ttyOf(target.pid);
     if (!tty) {
-      return {
-        focused: false,
-        reason: viaHost ? 'background agent — parked window is gone' : 'session has no tty',
-      };
+      return { reason: viaHost ? 'background agent — parked window is gone' : 'session has no tty' };
+    }
+    return { target, viaHost, tty };
+  }
+
+  // The tmux pane a session is in, or null. Exposed because the question queue
+  // reads the pane's screen to learn what a dialog is really offering, which it
+  // does before any focusing happens.
+  async function paneForSession(sessionId) {
+    const t = await targetFor(sessionId);
+    if (!t.tty) return null;
+    return tmux.paneForTty(t.tty);
+  }
+
+  // `select` is what separates the two things this is asked for. Raising a
+  // session because someone pressed it on the device SHOULD jump tmux to that
+  // pane — that is the whole request. Answering a question should not: the keys
+  // land in the pane by name, so moving what the user is looking at buys
+  // nothing and interrupts whatever they were reading.
+  async function focusSession(sessionId, { select = true } = {}) {
+    const { target, viaHost, tty, reason } = await targetFor(sessionId);
+    if (!tty) return { focused: false, reason };
+
+    // tmux first: a pane is a strictly better target than a window. It is named
+    // rather than frontmost, so nothing can drift between focusing and typing,
+    // and it needs no permission macOS can deny.
+    const pane = await tmux.paneForTty(tty);
+    if (pane) {
+      // Copy mode eats the keys — a Down would scroll the scrollback instead of
+      // moving the dialog's cursor. Say so rather than typing into it.
+      if (pane.inMode) {
+        return { focused: false, reason: `tmux pane ${pane.label} is in copy mode` };
+      }
+      if (select) await tmux.selectPane(pane.id);
+      log('FC', `pane ${pane.label} for ${target.name || sessionId.slice(0, 8)}${viaHost ? ' [parked host]' : ''}`);
+      return { focused: true, app: 'tmux', exact: true, pane: pane.id, paneLabel: pane.label, tty, viaHost };
     }
 
-    const app = await ownerApp(target.pid);
+    const app = await appOf(target.pid);
     if (app && app !== 'Terminal') {
       // Only Terminal.app exposes tty per tab; raise the app and say so.
-      const r = await osa(`tell application "${app}" to activate`);
+      const r = await osascript(`tell application "${app}" to activate`);
       return r.ok
         ? { focused: true, app, exact: false, reason: `${app} raised (tab targeting unsupported)` }
         : { focused: false, reason: r.denied ? `automation denied for ${app}` : r.error };
     }
 
-    const r = await osa(TERMINAL_RAISE(tty));
+    // A terminal we could not name is not Terminal.app. Falling through to the
+    // script below anyway *launched* Terminal — `tell application "Terminal"`
+    // starts it — and then reported the confusing "no tab owns that tty", which
+    // is how a session in a tmux pane used to open a stray empty window every
+    // time the device tried to answer it.
+    if (!app) return { focused: false, reason: 'could not identify the terminal app for that session' };
+
+    const r = await osascript(TERMINAL_RAISE(tty));
     if (!r.ok) {
       if (r.denied) {
         automationDenied = true;
@@ -204,14 +264,24 @@ export function createFocus() {
     return { focused: true, app: 'Terminal', exact: true, tty, viaHost };
   }
 
-  // Types a single character into the focused window. Requires Automation →
-  // System Events; if macOS denies it we report that and leave the prompt to
-  // the keyboard rather than attempting any other injection route.
-  async function typeKey(char) {
+  // The tmux route for both typers. Nothing about it can be denied and nothing
+  // about it depends on which window is in front, so there is no permission
+  // state to carry and no focus to re-check.
+  async function sendToPane(pane, keys) {
+    const r = await tmux.sendKeys(pane, keys);
+    return r.sent ? { typed: true, via: 'tmux' } : { typed: false, reason: r.reason };
+  }
+
+  // Types a single character. A tmux target takes the pane route; anything else
+  // requires Automation → System Events, and if macOS denies it we report that
+  // and leave the prompt to the keyboard rather than attempting any other
+  // injection route.
+  async function typeKey(char, target) {
+    if (target && target.pane) return sendToPane(target.pane, [char]);
     if (automationDenied) return { typed: false, reason: 'automation denied' };
     const safe = String(char).slice(0, 1).replace(/["\\]/g, '');
     if (!safe) return { typed: false, reason: 'nothing to type' };
-    const r = await osa(`tell application "System Events" to keystroke "${safe}"`);
+    const r = await osascript(`tell application "System Events" to keystroke "${safe}"`);
     if (r.ok) return { typed: true };
     if (r.denied) {
       return {
@@ -225,12 +295,14 @@ export function createFocus() {
   // Types a whole sequence into the focused window in ONE osascript call.
   // One call on purpose: a multi-question dialog needs several keys landing in
   // the same window, and re-invoking osascript per key opens a gap where focus
-  // can move and half the answer lands somewhere else.
+  // can move and half the answer lands somewhere else. (The tmux route above
+  // has no such gap — send-keys names its pane — so it sends key by key.)
   //
   // A key is either a single character (sent as `keystroke`) or one of the
   // named non-printing keys below. The delay between keys is what lets the TUI
   // redraw and move to the next question before the following key arrives.
-  async function typeSequence(keys) {
+  async function typeSequence(keys, target) {
+    if (target && target.pane) return sendToPane(target.pane, keys);
     if (automationDenied) return { typed: false, reason: 'automation denied' };
     const lines = [];
     for (const key of keys) {
@@ -246,7 +318,7 @@ export function createFocus() {
     if (!lines.length) return { typed: false, reason: 'nothing to type' };
 
     const script = ['tell application "System Events"', ...lines, 'end tell'].join('\n');
-    const r = await osa(script, 3000 + keys.length * 400);
+    const r = await osascript(script, 3000 + keys.length * 400);
     if (r.ok) return { typed: true };
     if (r.denied) {
       return {
@@ -259,6 +331,8 @@ export function createFocus() {
 
   // focusSession/typeKey/typeSequence are the primitives and do NOT take the
   // lock themselves — that would deadlock the focus-then-type pair, which has
-  // to hold it across both. Callers wrap them in exclusive().
-  return { exclusive, focusSession, typeKey, typeSequence, lookupSession };
+  // to hold it across both. Callers wrap them in exclusive(). paneForSession and
+  // capturePane are outside it on purpose: they only read, and the plan card
+  // reads a pane while another session's answer may well be typing into its own.
+  return { exclusive, focusSession, paneForSession, capturePane: (id) => tmux.capturePane(id), typeKey, typeSequence, lookupSession };
 }
