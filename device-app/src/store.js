@@ -1,6 +1,6 @@
 // App state: session snapshot, detail cache, permission queue, daemon link.
 
-import { setTzOffset, setServerNow, now } from './clock.js';
+import { setTzOffset, setServerNow, setClock24, now } from './clock.js';
 
 var state = {
   sessions: [],
@@ -73,6 +73,7 @@ export function update(fields) {
 export function applySnapshot(snap) {
   setServerNow(snap.serverNowMs);
   setTzOffset(snap.tzOffsetMin);
+  setClock24(snap.clock24);
   var sel = state.sessions[state.selectedIndex];
   var fields = { sessions: snap.sessions || [], stats: snap.stats || state.stats };
   // Details for sessions the daemon no longer lists would pile up forever on a

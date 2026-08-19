@@ -139,6 +139,9 @@ test('every snapshot carries the Mac epoch and UTC offset', () => {
   const snap = store.snapshot();
   assert.ok(Math.abs(snap.serverNowMs - Date.now()) < 1000, 'Mac epoch, freshly read');
   assert.equal(snap.tzOffsetMin, new Date().getTimezoneOffset());
+  // Clock format rides along, already resolved — settings.test.js owns which
+  // way it resolves; here it only has to be a boolean the device can branch on.
+  assert.equal(typeof snap.clock24, 'boolean');
 });
 
 test('stats count busy and attention sessions', () => {

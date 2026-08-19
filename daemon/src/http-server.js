@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { HOST, PORT, WEBPAGE_DIST, DAEMON_VERSION, DAEMON_ROOT } from './config.js';
 import { log } from './log.js';
+import { readSettings, setClockFormat, resolveClock24 } from './settings.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -23,6 +24,13 @@ function readBody(req) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
+}
+
+// What the Settings page needs: the stored choice plus what "auto" currently
+// resolves to, so the page can say which format auto is giving today.
+function statusSettings() {
+  const settings = readSettings();
+  return { clockFormat: settings.clockFormat, clock24: resolveClock24(settings) };
 }
 
 export function createHttpServer({ hub, store, permissionBridge, sources }) {
@@ -64,6 +72,22 @@ export function createHttpServer({ hub, store, permissionBridge, sources }) {
       }
     }
 
+    // Clock format from the webpage's Settings page. Pushing a snapshot right
+    // after the write is what makes the device flip in a frame instead of
+    // waiting out the heartbeat — same move as the sessions.list handler.
+    if (req.method === 'POST' && url === '/api/settings') {
+      let payload = {};
+      try { payload = JSON.parse(await readBody(req) || '{}'); } catch {}
+      const settings = setClockFormat(payload.clockFormat);
+      if (!settings) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'unknown clockFormat' }));
+      }
+      hub.emit('claude.sessions.update', store.snapshot());
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, settings: statusSettings() }));
+    }
+
     if (url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
@@ -74,6 +98,7 @@ export function createHttpServer({ hub, store, permissionBridge, sources }) {
         connector: hub.connectorStatus(),
         sources: sources.status(),
         hooks: sources.hooksInstalled(),
+        settings: statusSettings(),
       }));
     }
 

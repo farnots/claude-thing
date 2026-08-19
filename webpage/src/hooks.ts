@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getStatus, onConnection, onTopic } from './ws';
 
+export type ClockFormat = 'auto' | '12' | '24';
+
 export type Status = {
   daemonVersion: string;
   sessions: number;
@@ -12,6 +14,9 @@ export type Status = {
   };
   sources: string[];
   hooks: boolean;
+  // clock24 is what clockFormat resolves to right now — 'auto' is settled
+  // against the Mac's locale by the daemon, not here.
+  settings: { clockFormat: ClockFormat; clock24: boolean };
 };
 
 // Polls /status and refreshes immediately on any daemon event, mirroring the
