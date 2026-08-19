@@ -1,4 +1,4 @@
-import { esc, topbar } from './helpers.js';
+import { esc, topbar, moodFor, usageReadings } from './helpers.js';
 
 // The real /usage figures: plan-limit percentages with reset times, plus the
 // "what's contributing" breakdown. Each bar carries its own mascot driven by
@@ -16,21 +16,11 @@ export var USAGE_COLS = 2;
 
 export function renderUsage(state) {
   var bar = topbar('USAGE', state.daemonConnected);
-  var list = readings(state.usage);
+  var list = usageReadings(state.usage);
   // One account keeps the full-width layout it has always had, mascot phrases
   // and contributing tables included. Nothing about that case changes.
   if (list.length < 2) return single(bar, list[0] || null);
   return columns(bar, list, state.usageCol || 0);
-}
-
-// Whatever the daemon sent, as a list of per-account readings. The array is what
-// a current daemon sends when asked for it; the flat fields are what one that
-// predates accounts sends, and what the default response still carries — so the
-// old shape is one unnamed reading rather than a special case downstream.
-function readings(u) {
-  if (!u) return [];
-  if (u.accounts && u.accounts.length) return u.accounts;
-  return [u];
 }
 
 function single(bar, r) {
@@ -50,7 +40,7 @@ function single(bar, r) {
 
 function wideBar(l) {
   var pct = fill(l);
-  var m = mood(pct);
+  var m = moodFor(pct);
   return '<div class="ubar">' +
     '<div class="ubarmain">' +
     '<div class="uhead"><span class="ulabel">' + esc(l.label) + '</span>' +
@@ -116,7 +106,7 @@ function column(r) {
 // the track instead of sharing the header line.
 function narrowBar(l) {
   var pct = fill(l);
-  var m = mood(pct);
+  var m = moodFor(pct);
   return '<div class="ubar ucompact">' +
     '<div class="ubarmain">' +
     '<div class="uhead"><span class="ulabel">' + esc(l.label) + '</span>' +
@@ -178,14 +168,6 @@ function table(title, rows) {
   if (!body) body = '<div class="utrow"><span class="utname">—</span></div>';
   return '<div class="utable"><div class="uthead"><span class="uttitle">' + title + '</span>' +
     '<span class="utunit">% of usage</span></div>' + body + '</div>';
-}
-
-// Under 80% clear, 80–99% sweating, 100% fainted. The thresholds are the
-// design's; the sprite and the fill colour always agree.
-function mood(pct) {
-  if (pct >= 1) return 'mood-out';
-  if (pct >= 0.8) return 'mood-low';
-  return 'mood-clear';
 }
 
 function moodLabel(pct) {

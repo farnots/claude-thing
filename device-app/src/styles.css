@@ -1573,6 +1573,66 @@ html, body {
   border-radius: 5px;
   margin: 0 8px;
 }
+/* The session window, one row per account. Fixed column widths so two rows line
+   up under each other in mono — a percentage that shifts sideways between rows is
+   unreadable at desk distance. The track and its fill are the usage screen's,
+   slimmed here: same element, same mood colours, one third the height.
+   No `subgrid` and no flex `gap` — Chrome 69 (see carthing-knowledge/ui.md §3)
+   has neither, so each row carries the column widths itself and the rows are
+   spaced with margins. */
+.ambient .ustrip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 18px;
+}
+.ambient .arow {
+  display: grid;
+  grid-template-columns: 116px 62px 168px 92px 54px;
+  grid-gap: 0 10px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.ambient .aname {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ambient .apct {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 22px;
+  line-height: 1;
+  text-align: right;
+  color: var(--bone);
+}
+.ambient .utrack {
+  display: block;
+  height: 10px;
+  border-radius: 4px;
+}
+.ambient .aleft {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 17px;
+  color: var(--dim);
+}
+.ambient .aleft.mood-low { color: var(--warn); }
+.ambient .aleft.mood-out { color: var(--danger); }
+.ambient .anote,
+.ambient .astale,
+.ambient .amore {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  color: var(--faintest);
+}
+.ambient .anote {
+  grid-column: span 3;
+}
+
 .ambient .tokens {
   margin-top: 20px;
   font-family: "JetBrains Mono", Menlo, monospace;

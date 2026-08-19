@@ -19,6 +19,26 @@ export function fmtDuration(ms) {
   return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
 }
 
+// Under 80% clear, 80-99% sweating, 100% fainted. The thresholds are the
+// design's, and they live here rather than on the usage screen because the clock
+// screen draws a fill from the same reading: two copies of "80" is how the two
+// screens end up disagreeing about when it starts to hurt.
+export function moodFor(pct) {
+  if (pct >= 1) return 'mood-out';
+  if (pct >= 0.8) return 'mood-low';
+  return 'mood-clear';
+}
+
+// Whatever the daemon sent, as a list of per-account readings. The array is what
+// a current daemon sends when asked for it; the flat fields are what one that
+// predates accounts sends, and what the default response still carries — so the
+// old shape is one unnamed reading rather than a special case downstream.
+export function usageReadings(u) {
+  if (!u) return [];
+  if (u.accounts && u.accounts.length) return u.accounts;
+  return [u];
+}
+
 export function stateLabel(state, ended) {
   if (state === 'idle') return ended ? 'ENDED' : 'IDLE';
   return { busy: 'WORKING', attention: 'ATTENTION', celebrate: 'DONE' }[state] || 'IDLE';
