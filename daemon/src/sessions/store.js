@@ -7,6 +7,7 @@ import {
   AGENT_ACTIVE_TTL_MS, THINKING_TTL_MS, DETAIL_DEBOUNCE_MS, SNAPSHOT_HEARTBEAT_MS,
 } from '../config.js';
 import { contextFraction } from '../context-window.js';
+import { resolveClock24 } from '../settings.js';
 
 export function createStore() {
   const sessions = new Map(); // id -> internal record
@@ -133,6 +134,11 @@ export function createStore() {
       stats,
       serverNowMs: Date.now(),
       tzOffsetMin: new Date().getTimezoneOffset(),
+      // Third thing the device cannot work out for itself: whether this user
+      // reads 14:05 or 2:05 PM. Sent as the answer rather than the rule — the
+      // Mac resolves the "auto" setting against its own locale here, so the
+      // device only ever branches on a boolean.
+      clock24: resolveClock24(),
       // Wire-hygiene probe, not data — clients must ignore its value except as
       // a transport check. The Mac connector's MsgPack packer used to coerce
       // NSNumber 0/1 to booleans; a device that receives intProbe === true
@@ -150,8 +156,9 @@ export function createStore() {
       snapshotTimer = null;
       const snap = snapshot();
       // serverNowMs is excluded from the key — it changes every time and would
-      // defeat the comparison; tzOffsetMin stays in so a DST flip still emits.
-      const key = JSON.stringify([snap.sessions, snap.stats, snap.tzOffsetMin]);
+      // defeat the comparison; tzOffsetMin and clock24 stay in so a DST flip or
+      // a clock-format change still emits.
+      const key = JSON.stringify([snap.sessions, snap.stats, snap.tzOffsetMin, snap.clock24]);
       const now = Date.now();
       if (key === lastSnapshotKey && now - lastSnapshotTs < SNAPSHOT_HEARTBEAT_MS) return;
       lastSnapshotKey = key;

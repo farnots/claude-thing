@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { esc, fmtTokens, fmtDuration, stateLabel, modeLabel, effortLabel, isDestructive, watchTarget } from '../src/screens/helpers.js';
-import { fmtClock, setTzOffset, setServerNow, now, resetClock } from '../src/clock.js';
+import { fmtClock, setTzOffset, setServerNow, setClock24, now, resetClock } from '../src/clock.js';
 import { renderList } from '../src/screens/session-list.js';
 import { renderQueue } from '../src/screens/queue.js';
 import { renderUsage } from '../src/screens/usage.js';
@@ -55,6 +55,29 @@ test('clock renders daemon-local time from the snapshot offset, UTC-clock proof'
   setTzOffset(undefined);                              // old daemon: fall back to local
   const local = new Date(2026, 6, 31, 9, 7);
   assert.equal(fmtClock(local), '9:07 AM');
+  resetClock();
+});
+
+// The format is a preference the Mac resolves and the device only obeys, so the
+// device-side contract is narrow: a true flips it, anything else — including a
+// daemon too old to send the field — leaves the AM/PM behaviour untouched.
+test('clock renders 24-hour when the snapshot says so', () => {
+  const t = new Date(Date.UTC(2026, 6, 31, 18, 5));   // 18:05 UTC
+  setTzOffset(240);                                    // EDT: UTC-4
+  setClock24(true);
+  assert.equal(fmtClock(t), '14:05');
+  setTzOffset(-330);                                   // IST: UTC+5:30
+  assert.equal(fmtClock(t), '23:35');
+  // Padded on both halves — 24-hour means 09:07, never 9:07.
+  setTzOffset(0);
+  assert.equal(fmtClock(new Date(Date.UTC(2026, 6, 31, 9, 7))), '09:07');
+  assert.equal(fmtClock(new Date(Date.UTC(2026, 6, 31, 0, 3))), '00:03');
+
+  setClock24(false);
+  setTzOffset(240);
+  assert.equal(fmtClock(t), '2:05 PM', 'switching back needs no reload');
+  setClock24(undefined);                               // old daemon: no field
+  assert.equal(fmtClock(t), '2:05 PM');
   resetClock();
 });
 
