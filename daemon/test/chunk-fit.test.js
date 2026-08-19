@@ -18,6 +18,7 @@ test(`a ${BT_SAFE_SESSION_LIMIT}-session worst-case list response fits the BT ch
   for (let i = 0; i < BT_SAFE_SESSION_LIMIT; i++) {
     store.touch(`f47ac10b-58cc-4372-a567-0e02b2c3d4${String(i).padStart(2, '0')}`, {
       name: 'x'.repeat(32),                          // summary() caps at 32
+      cwd: `/Users/somebody/Developer/some-project-${i}`, // only its 8-char key travels
       model: 'us.anthropic.claude-opus-4-1-20250805-v1:0', // longest realistic id
       contextTokens: 999_999,                        // long context fraction float
       tokensIn: 999_999_999,

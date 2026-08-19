@@ -115,8 +115,69 @@ export function watchTarget(routeName, routeArg, state) {
   return null;
 }
 
-export function topbar(title, connected, count) {
-  return '<div class="topbar"><span class="mark"></span>' +
+// The colour a project wears, from the key the daemon puts on every session.
+//
+// Deliberately coarse: twelve hues 30 degrees apart, each in a deep and a
+// pastel take, for 24 swatches. Spreading the hash over all 360 hues looks like
+// more resolution and is less — two projects landing a few degrees apart are
+// one colour to the eye, so the grid quietly claims they are one project.
+// Rounding to a step the eye can actually resolve does not make collisions
+// rarer — measured over random paths, the odds that a screenful holds a
+// confusable pair are the same either way: 12% at three projects, 23% at four,
+// 36% at five, 49% at six. It makes them honest. Free-range, the question the
+// panel raises is "are those two the same colour?"; here two stripes either
+// plainly match or plainly don't, and two that differ are guaranteed to look
+// it. A colliding pair is also the mild failure: it reads as one project where
+// there are two, while the case this feature exists for — several tiles all
+// printing the same basename — is settled the moment their stripes differ.
+//
+// Lightness is the second axis and not saturation, which was tried first and
+// does not survive a 6px stripe: a muted teal and a vivid teal at the same hue
+// read as the same colour, so the axis counted as separation in the arithmetic
+// and delivered none on the panel. Deep against pastel reads at that width.
+//
+// Saturation sits at the semantic colours' level or below (--warn is a full
+// 100%, --danger 71%) and the stripe runs down an edge no state mark uses, so
+// no hue can pass for an annunciator lamp. Empty for a session whose directory
+// nothing has named — the caller then draws no mark at all rather than one
+// colour standing for "unknown". The detail screen prints the whole path, which
+// is where a doubt about two matching stripes gets settled.
+var PROJECT_HUES = 12;
+
+export function projectColor(key) {
+  var hue = projectHue(key);
+  if (hue === null) return '';
+  return 'hsl(' + hue + ', 55%, ' + (projectPale(key) ? 70 : 46) + '%)';
+}
+
+export function projectHue(key) {
+  var n = projectNum(key);
+  return n === null ? null : (n % PROJECT_HUES) * (360 / PROJECT_HUES);
+}
+
+// The second axis, off the bits the hue does not use: same hue, deep or pastel.
+export function projectPale(key) {
+  var n = projectNum(key);
+  return n === null ? false : Math.floor(n / PROJECT_HUES) % 2 === 1;
+}
+
+function projectNum(key) {
+  if (!key) return null;
+  // The key is already a well-spread 32-bit hash, so its low bits are as good
+  // as any; hashing it a second time would buy nothing.
+  var n = parseInt(key, 16);
+  return isNaN(n) ? null : n;
+}
+
+// `color` tints the screen to the project it belongs to: the mark takes it and
+// the rule under the bar picks it up, which is how a session screen says which
+// of the identically-named tiles you actually opened. Screens that span every
+// session — the list, the queue, usage — pass nothing and keep the brand accent.
+export function topbar(title, connected, count, color) {
+  return '<div class="topbar' + (color ? ' tinted' : '') + '"' +
+    (color ? ' style="border-bottom-color:' + color + '"' : '') + '>' +
+    '<span class="mark"' + (color ? ' style="background:' + color + '"' : '') +
+    '></span>' +
     '<span class="title">' + esc(title) + '</span>' +
     (count ? '<span class="tcount">' + esc(count) + '</span>' : '') +
     '<span class="spacer"></span>' +

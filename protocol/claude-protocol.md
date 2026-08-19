@@ -85,8 +85,16 @@ SessionSummary = {
                         // "ultrathink"); null until one says — the device
                         // then draws no effort label and keeps the plain
                         // working sprite
+  project: string,      // 8 hex chars keying the session's working directory,
+                        // or "" when no source has named one. Sessions sharing
+                        // a directory share the key; the device derives a hue
+                        // from it and tints them alike, which is the only thing
+                        // that separates three tiles all named after the same
+                        // basename. The path itself never travels here — it
+                        // costs more than the per-session margin of the chunk
+                        // budget below — and SessionDetail already carries cwd
 }
-// ~290 B each measured (~330 worst case), unbounded count — the device grid
+// ~300 B each measured (~350 worst case), unbounded count — the device grid
 // scrolls sideways through them. Over Bluetooth an async event snapshot spans
 // multiple chunks, which the chunking layer handles; a *synchronous* response
 // cannot, so a constrained client should pass `limit` on claude.sessions.list

@@ -7,6 +7,7 @@ import {
   AGENT_ACTIVE_TTL_MS, THINKING_TTL_MS, DETAIL_DEBOUNCE_MS, SNAPSHOT_HEARTBEAT_MS,
 } from '../config.js';
 import { contextFraction } from '../context-window.js';
+import { projectKey } from './project.js';
 import { resolveClock24, resolveLang } from '../settings.js';
 
 export function createStore() {
@@ -66,6 +67,16 @@ export function createStore() {
       // the context track, and on ended sessions where there is no track at
       // all. Empty until a source reports one; the device then prints nothing.
       model: s.model || '',
+      // Which project the session belongs to, as a short stable key over its
+      // working directory: two sessions in the same directory carry the same
+      // one, and the device tints them alike so a grid of same-named tiles
+      // still says which belong together. The directory itself does not fit —
+      // it costs more than the whole per-session margin of the Bluetooth chunk
+      // budget (chunk-fit.test.js) — and the device only needs it on the
+      // detail, which already carries cwd. Empty until a source names a
+      // directory; the device then draws no mark rather than one colour for
+      // every session it knows nothing about.
+      project: projectKey(s.projectDir),
       // idle means "nothing recently"; ended means the session is over. The
       // device labels them differently, so both have to travel.
       ended: !!s.ended,
@@ -201,6 +212,13 @@ export function createStore() {
       sessions.set(id, s);
     }
     Object.assign(s, fields);
+    // Which project this session belongs to is decided once and never revised.
+    // A hook's cwd is wherever the session currently *is* and moves with the
+    // agent's own cd (source-hooks.js), while the poller reports the directory
+    // it was launched in — so s.cwd alternates between the two and a tile would
+    // change colour mid-turn. The first directory anyone names wins; s.cwd goes
+    // on tracking the live one, which is what the detail screen prints.
+    if (fields.cwd && !s.projectDir) s.projectDir = fields.cwd;
     // Every fresh assertion that the session is thinking restamps the clock, so
     // the TTL measures silence since the last proof of life rather than time
     // since the turn began. Stamping only on the false->true edge meant a turn

@@ -164,7 +164,7 @@ test('summary stays small: name clamped, only the agreed fields', () => {
   assert.equal(s.name.length, 32);
   assert.deepEqual(Object.keys(s).sort(), [
     'context', 'effort', 'ended', 'id', 'lastActivityTs', 'model', 'name',
-    'pendingPermission', 'permissionMode', 'state', 'tokens',
+    'pendingPermission', 'permissionMode', 'project', 'state', 'tokens',
   ]);
   assert.deepEqual(s.tokens, { in: 5, out: 7 });
   assert.equal(s.context, null, 'no model, no window size, so no fraction');
@@ -342,4 +342,40 @@ test('every snapshot carries the integer intProbe', () => {
   const store = createStore();
   store.touch('a', { name: 'proj' });
   assert.equal(store.snapshot().intProbe, 1, 'strictly the integer 1 — its corruption is the signal');
+});
+
+// --- project grouping --------------------------------------------------------
+
+test('sessions sharing a working directory share a project key', () => {
+  const store = createStore();
+  store.touch('a', { name: 'proj', cwd: '/Users/dev/thing' });
+  store.touch('b', { name: 'proj', cwd: '/Users/dev/thing' });
+  store.touch('c', { name: 'thing', cwd: '/Users/dev/other/thing' });
+  const by = Object.fromEntries(store.snapshot().sessions.map((s) => [s.id, s.project]));
+
+  assert.equal(by.a, by.b, 'same directory, same key');
+  assert.notEqual(by.a, by.c,
+    'a shared basename is not a shared project — telling those apart is what the key is for');
+  assert.match(by.a, /^[0-9a-f]{8}$/, 'eight hex chars, which is what the chunk budget was measured against');
+});
+
+test('a session whose directory nothing named carries no project key', () => {
+  const store = createStore();
+  store.touch('a', { name: 'proj' });
+  assert.equal(store.snapshot().sessions[0].project, '',
+    'empty, so the device draws no mark rather than one colour meaning "unknown"');
+});
+
+test('a session that changes directory keeps the project it started in', () => {
+  const store = createStore();
+  // The poller reports the launch directory; a hook then reports wherever the
+  // agent has cd'd to. Only the first is the project.
+  store.touch('a', { name: 'proj', cwd: '/Users/dev/thing' });
+  const first = store.snapshot().sessions[0].project;
+
+  store.touch('a', { cwd: '/Users/dev/thing/packages/api' });
+  assert.equal(store.snapshot().sessions[0].project, first,
+    'the tile must not change colour mid-turn because the agent walked into a subdirectory');
+  assert.equal(store.get('a').cwd, '/Users/dev/thing/packages/api',
+    'the detail still shows where the session actually is');
 });
