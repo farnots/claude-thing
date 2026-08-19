@@ -1,5 +1,7 @@
 import fs from 'node:fs';
-import { DAEMON_VERSION, PID_FILE, MOCK_SESSIONS, BT_SAFE_SESSION_LIMIT } from './config.js';
+import {
+  DAEMON_VERSION, PID_FILE, MOCK_SESSIONS, BT_SAFE_SESSION_LIMIT, BT_SAFE_USAGE_ACCOUNTS,
+} from './config.js';
 import { createHub } from './hub.js';
 import { createStore } from './sessions/store.js';
 import { createPermissionBridge } from './permission-bridge.js';
@@ -7,7 +9,7 @@ import { createSources } from './sessions/index.js';
 import { createHttpServer } from './http-server.js';
 import { createFocus } from './focus.js';
 import { createQueue } from './queue.js';
-import { createUsage, slimUsage } from './usage.js';
+import { createUsage } from './usage.js';
 import { log } from './log.js';
 
 // Broadcast the whole waiting list whenever a client turns up, so a screen that
@@ -67,14 +69,37 @@ hub.setMethods({
   // focus and its keystrokes would send them to the window it just raised.
   'claude.session.focus': async ({ id }) => focus.exclusive(() => focus.focusSession(id)),
 
-  // {slim} returns the device-rendered subset — see slimUsage() — so the
-  // synchronous boot response stays well inside one Bluetooth chunk.
-  'claude.usage.get': async ({ slim } = {}) => (slim ? slimUsage(usage.get()) : usage.get()),
+  // Three shapes, because a synchronous response cannot span Bluetooth chunks
+  // and the multi-account reading does not fit one:
+  //
+  //   {slim}                    the flat mirror of the primary account — byte
+  //                             for byte what this method returned before
+  //                             accounts existed, so a device app that predates
+  //                             them keeps drawing a correct screen.
+  //   {slim, account:"poly"}    that one account, same flat shape.
+  //   {slim, accounts:1}        the array. Opting in is what makes the default
+  //                             backwards compatible; the mirror is left out
+  //                             here so two accounts fit the chunk budget.
+  //
+  // Relay roles are capped like claude.sessions.list, for the same reason, and
+  // the accounts the cap drops arrive on the follow-up event, which chunks.
+  'claude.usage.get': async ({ slim, accounts, account } = {}, { role } = {}) => {
+    if (account) return usage.get({ account, slim });
+    if (!accounts) return usage.get({ slim });
+    const cap = (role === 'connector' || role === 'emulator') ? BT_SAFE_USAGE_ACCOUNTS : 0;
+    const out = usage.all({ cap, slim });
+    if (cap > 0 && out.accountCount > out.accounts.length) {
+      // The event shape, mirror included — an old client behind the same relay
+      // reads the flat fields off this push too.
+      setTimeout(() => hub.emit('claude.usage.update', usage.all({ slim: 1, withMirror: true })), 0);
+    }
+    return out;
+  },
 });
 
 let server;
 try {
-  server = await createHttpServer({ hub, store, permissionBridge, sources });
+  server = await createHttpServer({ hub, store, permissionBridge, sources, usage });
 } catch (err) {
   console.error(`daemon startup failed: ${err.message}`);
   process.exit(1);

@@ -23,8 +23,10 @@ var NUMERIC = {
   contextTokens: true, cacheRead: true, startedTs: true,
   // Ask / permission
   createdTs: true, timeoutMs: true, expiredTs: true,
-  // Usage
+  // Usage — accountCount is 1 on a single-account Mac, which is exactly the
+  // value the connector coerces to `true`.
   updatedTs: true, used: true, requests: true, sessions: true, pct: true,
+  accountCount: true,
 };
 
 // The daemon stamps `intProbe: 1` on every snapshot. The connector's coercion

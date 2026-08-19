@@ -7,12 +7,23 @@
 // CLAUDE_CODE_SKIP_PROMPT_HISTORY=1, writes no transcript.
 //
 // Everything here is parsed from that text. We never invent a denominator.
+//
+// One reading per account, an account being a CLAUDE_CONFIG_DIR (or its
+// absence — see usage-accounts.js). Every account gets its own reading, its own
+// anti-flap state and its own persisted figure; nothing about one is ever
+// derived from another, so an account that is signed out or misconfigured
+// cannot blank the screen for the rest.
 
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
-import { USAGE_REFRESH_MS } from './config.js';
+import {
+  USAGE_REFRESH_MS, USAGE_BACKOFF_AFTER, USAGE_ERROR_BACKOFF_MS,
+} from './config.js';
 import { markOwnSession } from './own-sessions.js';
+import {
+  configDirMissing, envForAccount, loadAccounts, normalizeAccounts,
+} from './usage-accounts.js';
 import { readState, writeState } from './persist.js';
 import { log } from './log.js';
 
@@ -251,23 +262,6 @@ export function reconcileUsage(prev, next) {
   };
 }
 
-// The last good reading, so a restart shows real figures instead of spending a
-// minute on "READING USAGE…". Flagged stale until the first live poll lands.
-function loadPersisted() {
-  const saved = readState(STATE_NAME);
-  if (!saved || !Array.isArray(saved.limits) || !saved.limits.length) return null;
-  // Dated by when the limits were read, which after a carry-over is older than
-  // the reading that saved them.
-  const ts = saved.limitsTs || saved.updatedTs;
-  const at = ts ? hhmm(ts) : '';
-  return {
-    ...saved,
-    stale: true,
-    error: undefined,
-    updatedLabel: `last reading${at ? ' ' + at : ''} · from claude /usage`,
-  };
-}
-
 // What actually went wrong, in the words the device has room for. A killed run
 // timed out — say that, rather than quoting whichever line stderr happened to
 // end on, which is how warnings get mistaken for causes.
@@ -282,16 +276,219 @@ export function describeFailure(err, stderr) {
   return line || String((err && err.message) || 'unknown error').split('\n')[0];
 }
 
-export function createUsage({ emit }) {
-  let latest = loadPersisted();
-  let timer = null;
-  let running = false;
+// ---- accounts on the wire ----------------------------------------------------
+//
+// `states` throughout this section is a Map of account id -> its latest reading
+// (or null). Keeping it a parameter rather than a closure is what lets every
+// function below stay pure and be tested without booting anything.
 
-  function run() {
-    // Our own polling is still a Claude Code session. disableAllHooks stops it
-    // reporting itself through the hook path, the explicit session id lets the
-    // session sources recognise and skip it, and running from a temp dir keeps
-    // it out of any project the user actually works in.
+const NOT_READ = { limits: [], error: 'usage not read yet' };
+
+// Same rule slimUsage follows, applied one level down: carry what the screen
+// draws. `columns` says the receiver will draw two columns, which happens from
+// two accounts on, and a column has no room for the contributing tables — it
+// draws the bars and the window line. Three skills plus three subagents per
+// account is ~330 bytes of an 1800-byte chunk spent on rows nobody renders, and
+// that is exactly the difference between two accounts fitting one synchronous
+// response (1449 bytes) and not (2101). With a single account the screen keeps
+// the full layout, tables included, so nothing is dropped there.
+export function slimAccount(account, u, columns = false) {
+  const slim = slimUsage(u) || NOT_READ;
+  const out = { ...slim, id: account.id, label: account.label };
+  if (!columns) return out;
+  const first = (slim.windows || [])[0];
+  out.windows = first
+    ? [{ window: first.window, requests: first.requests, sessions: first.sessions }]
+    : [];
+  return out;
+}
+
+// Which account the flat mirror speaks for: the first enabled one that actually
+// has limits. Not simply accounts[0] — detection puts the machine default first,
+// and if that is the account that is signed out or misconfigured then a client
+// reading only the flat fields (a firmware that predates multi-account) would be
+// shown nothing but an error while a perfectly good second account sat unread.
+// The mirror therefore moves only when an account breaks or is repaired, which
+// is exactly when it should, and accountId always names it.
+export function primaryOf(accounts, states) {
+  const enabled = accounts.filter((a) => a.enabled);
+  if (!enabled.length) return accounts[0] || null;
+  for (const a of enabled) {
+    const u = states.get(a.id);
+    if (u && u.limits && u.limits.length) return a;
+  }
+  return enabled[0];
+}
+
+// Primary first, everything else in declaration order. One ordering rule for the
+// mirror and for the array, so a capped response and the mirror can never
+// disagree about which account came first.
+export function orderForWire(accounts, states) {
+  const primary = primaryOf(accounts, states);
+  if (!primary) return [];
+  return [primary, ...accounts.filter((a) => a.enabled && a.id !== primary.id)];
+}
+
+// One reading of every account, plus the flat mirror of the primary.
+//
+// withMirror / withAccounts are separate because the three callers want three
+// different shapes, and the reason is the Bluetooth chunk budget: a synchronous
+// response cannot span chunks, so it carries either the mirror (what an old
+// client reads) or the array (what a new one reads), never both. The event
+// carries both, because events chunk.
+export function multiUsage(accounts, states, {
+  cap = 0, slim = true, withMirror = true, withAccounts = true,
+} = {}) {
+  const order = orderForWire(accounts, states);
+  const primary = order[0] || null;
+  const out = {};
+
+  if (withMirror) {
+    const u = primary ? states.get(primary.id) : null;
+    Object.assign(out, (slim ? slimUsage(u) : u) || NOT_READ);
+  }
+  out.accountId = primary ? primary.id : '';
+  out.accountCount = order.length;
+
+  if (withAccounts) {
+    const carried = cap > 0 ? order.slice(0, cap) : order;
+    // Narrowed only when there is more than one to draw — see slimAccount.
+    const columns = carried.length > 1;
+    out.accounts = carried.map((a) => (
+      slim ? slimAccount(a, states.get(a.id), columns)
+           : { id: a.id, label: a.label, ...(states.get(a.id) || NOT_READ) }
+    ));
+  }
+  return out;
+}
+
+// Structural or transient? A missing config file and a signed-out account fail
+// identically on every retry, so they are worth backing off; a timeout is the
+// machine being busy and is worth trying again in a minute.
+export function classifyFailure(message) {
+  const s = String(message || '');
+  if (/timed out after/i.test(s)) return 'timeout';
+  if (/configuration file not found|no such file|not found at/i.test(s)) return 'config';
+  if (/not logged in|invalid api key|please run \/login|credentials|unauthorized/i.test(s)) return 'auth';
+  return 'other';
+}
+
+// How long until this account's next poll. A structural failure repeated this
+// many times is not going to fix itself in a minute, and retrying it there costs
+// a 45s `claude` boot every minute plus one more writer on the session registry.
+// One good reading clears the streak, so a repaired account is back on the
+// nominal interval immediately.
+export function backoffFor(failStreak, refreshMs) {
+  return failStreak >= USAGE_BACKOFF_AFTER ? USAGE_ERROR_BACKOFF_MS : refreshMs;
+}
+
+// Polls are spread across the refresh window rather than fired together. A run
+// takes the better part of 20-45s, so running two accounts back to back would
+// overrun the 60s window, and running them at the same instant doubles the
+// number of concurrent `claude` processes rewriting the session registry the
+// poller reads (see RETIRE_AFTER_MISSED_POLLS in config.js). Spreading them does
+// neither: two accounts land at t=0 and t=30s, and each still gets a reading
+// every 60s.
+export function scheduleFor(accounts, refreshMs) {
+  const enabled = accounts.filter((a) => a.enabled);
+  const step = Math.floor(refreshMs / (enabled.length || 1));
+  return enabled.map((a, i) => ({ id: a.id, delayMs: i * step, intervalMs: refreshMs }));
+}
+
+// ---- persistence -------------------------------------------------------------
+
+// The last good reading, so a restart shows real figures instead of spending a
+// minute on "READING USAGE…". Flagged stale until the first live poll lands.
+function labelPersisted(saved) {
+  if (!saved || !Array.isArray(saved.limits) || !saved.limits.length) return null;
+  // Dated by when the limits were read, which after a carry-over is older than
+  // the reading that saved them.
+  const ts = saved.limitsTs || saved.updatedTs;
+  const at = ts ? hhmm(ts) : '';
+  return {
+    ...saved,
+    stale: true,
+    error: undefined,
+    updatedLabel: `last reading${at ? ' ' + at : ''} · from claude /usage`,
+  };
+}
+
+function loadPersistedMap(list) {
+  const out = new Map(list.map((a) => [a.id, null]));
+  const saved = readState(STATE_NAME);
+  if (!saved) return out;
+
+  // v2: one entry per account id. Ids the declaration no longer mentions are
+  // ignored rather than deleted — an account disabled today may come back, and
+  // its figures are still the last true thing we knew about it.
+  if (saved.accounts && typeof saved.accounts === 'object' && !Array.isArray(saved.accounts)) {
+    for (const a of list) out.set(a.id, labelPersisted(saved.accounts[a.id]));
+    return out;
+  }
+
+  // v1: a single flat reading, written by a daemon that measured whichever
+  // account its own environment happened to name — and that is information no
+  // migration can recover. Attributing it to the first declared account invents
+  // nothing about the others, and the first poll of each supersedes it anyway.
+  if (Array.isArray(saved.limits) && list.length) out.set(list[0].id, labelPersisted(saved));
+  return out;
+}
+
+// ---- the poller --------------------------------------------------------------
+
+export function createUsage({ emit, accounts, runUsage, home } = {}) {
+  let list = [];
+  const slots = new Map();
+
+  function states() {
+    const m = new Map();
+    for (const [id, slot] of slots) m.set(id, slot.latest);
+    return m;
+  }
+
+  function install(next) {
+    list = next;
+    const saved = loadPersistedMap(list);
+    for (const a of list) {
+      const prev = slots.get(a.id);
+      // A surviving account keeps the reading it already has: re-reading it off
+      // disk would swap a live figure for the older persisted one.
+      if (prev) { prev.account = a; continue; }
+      const restored = saved.get(a.id) || null;
+      slots.set(a.id, {
+        account: a,
+        latest: restored,
+        // The last reading that satisfied limitsTs === updatedTs. Kept apart from
+        // `latest` because persistAll rewrites the whole file: without it, saving
+        // one account's fresh figure would drag another account's *held* figure
+        // onto disk, which is precisely what the hold forbids.
+        persisted: restored,
+        running: false,
+        timer: null,
+        failStreak: 0,
+        failKind: null,
+      });
+    }
+    for (const id of [...slots.keys()]) {
+      if (list.some((a) => a.id === id)) continue;
+      const gone = slots.get(id);
+      if (gone.timer) clearTimeout(gone.timer);
+      slots.delete(id);
+    }
+  }
+
+  function persistAll() {
+    const out = {};
+    for (const [id, slot] of slots) if (slot.persisted) out[id] = slot.persisted;
+    writeState(STATE_NAME, { version: 2, accounts: out });
+  }
+
+  // Our own polling is still a Claude Code session. disableAllHooks stops it
+  // reporting itself through the hook path, the explicit session id lets the
+  // session sources recognise and skip it, and running from a temp dir keeps
+  // it out of any project the user actually works in. One marked id per run, so
+  // no account's poll is mistaken for a real session.
+  function defaultRun(account) {
     const sessionId = crypto.randomUUID();
     markOwnSession(sessionId);
 
@@ -302,7 +499,8 @@ export function createUsage({ emit }) {
         {
           timeout: RUN_TIMEOUT_MS,
           cwd: os.tmpdir(),
-          env: { ...process.env, CLAUDE_CODE_SKIP_PROMPT_HISTORY: '1' },
+          // Which account this reading is of, and the only thing that decides it.
+          env: envForAccount(account),
           maxBuffer: 1024 * 1024,
           // Closed stdin, not an idle pipe. `claude -p` waits three seconds for
           // input that is never coming, warns about it, and only then starts —
@@ -317,21 +515,47 @@ export function createUsage({ emit }) {
     });
   }
 
-  async function refresh() {
-    if (running) return latest;
-    running = true;
+  const run = runUsage || defaultRun;
+
+  async function refreshOne(id) {
+    const slot = slots.get(id);
+    if (!slot) return null;
+    if (slot.running) return slot.latest;
+
+    // Not polled at all. A run against a directory that is not there burns the
+    // full timeout to tell us what one existsSync already said, and does it once
+    // a minute forever. Re-checked every tick, so a restored directory heals
+    // without a restart.
+    if (configDirMissing(slot.account)) {
+      slot.latest = {
+        ...(slot.latest || {}),
+        limits: (slot.latest && slot.latest.limits) || [],
+        stale: true,
+        error: `config dir missing: ${slot.account.configDir}`,
+      };
+      slot.failKind = 'config';
+      slot.failStreak = USAGE_BACKOFF_AFTER;
+      return slot.latest;
+    }
+
+    slot.running = true;
     try {
-      const out = await run();
+      const out = await run(slot.account);
       if (out.error) {
-        latest = {
-          ...(latest || {}),
+        slot.latest = {
+          ...(slot.latest || {}),
           stale: true,
           error: `claude /usage failed: ${out.error}`.slice(0, 120),
         };
+        const kind = classifyFailure(out.error);
+        slot.failKind = kind;
+        slot.failStreak = (kind === 'config' || kind === 'auth') ? slot.failStreak + 1 : 0;
       } else {
         const parsed = parseUsage(out.text);
         if (parsed) {
-          latest = reconcileUsage(latest, parsed);
+          slot.failStreak = 0;
+          slot.failKind = null;
+          slot.latest = reconcileUsage(slot.latest, parsed);
           // Nothing to carry and nothing read: say which of the two it is,
           // rather than leaving the screen on "READING USAGE…" forever.
           //
@@ -339,27 +563,106 @@ export function createUsage({ emit }) {
           // `limitsTs === updatedTs` says: a carried-over or held figure is
           // dated earlier and must never reach the state file, or a restart —
           // or an update — recovers the wrong number and shows it again.
-          if (latest.limits.length && latest.limitsTs === latest.updatedTs) {
-            writeState(STATE_NAME, latest);
+          if (slot.latest.limits.length && slot.latest.limitsTs === slot.latest.updatedTs) {
+            slot.persisted = slot.latest;
+            persistAll();
           }
-          else latest = { ...latest, stale: true, error: 'claude /usage printed no limits' };
+          else slot.latest = { ...slot.latest, stale: true, error: 'claude /usage printed no limits' };
         } else {
-          latest = { ...(latest || {}), stale: true, error: 'could not parse /usage output' };
+          slot.latest = { ...(slot.latest || {}), stale: true, error: 'could not parse /usage output' };
         }
       }
-      emit('claude.usage.update', slimUsage(latest));
     } catch (err) {
-      log('US', `usage refresh failed: ${err.message}`);
+      log('US', `${id}: usage refresh failed: ${err.message}`);
     } finally {
-      running = false;
+      slot.running = false;
     }
-    return latest;
+    return slot.latest;
   }
 
+  // One event per refresh, carrying every account — never one event per account.
+  // The Mac connector coalesces by topic alone (ClaudeRelayService.coalesceKey),
+  // so two frames on this topic inside its 200ms window supersede each other;
+  // that is lossless only while each frame is a complete snapshot.
+  function announce() {
+    if (emit) emit('claude.usage.update', multiUsage(list, states()));
+  }
+
+  async function tick(id) {
+    await refreshOne(id);
+    announce();
+  }
+
+  function schedule(id, delayMs) {
+    const slot = slots.get(id);
+    if (!slot) return;
+    // Self-rescheduling rather than setInterval: the interval is not constant —
+    // an account that keeps failing structurally backs off — and a fixed
+    // interval cannot express that.
+    slot.timer = setTimeout(async () => {
+      slot.timer = null;
+      await tick(id);
+      const still = slots.get(id);
+      if (still) schedule(id, backoffFor(still.failStreak, USAGE_REFRESH_MS));
+    }, delayMs);
+  }
+
+  function start() {
+    for (const s of scheduleFor(list, USAGE_REFRESH_MS)) schedule(s.id, s.delayMs);
+  }
+
+  function stop() {
+    for (const slot of slots.values()) {
+      if (slot.timer) clearTimeout(slot.timer);
+      slot.timer = null;
+    }
+  }
+
+  install(accounts ? normalizeAccounts(accounts) : loadAccounts({ home }));
+
   return {
-    start: () => { refresh(); timer = setInterval(refresh, USAGE_REFRESH_MS); },
-    stop: () => clearInterval(timer),
-    get: () => latest || { limits: [], error: 'usage not read yet' },
-    refresh,
+    start,
+    stop,
+
+    // Re-read the declaration: new accounts appear, removed ones go, and the
+    // readings of everything that survived are kept.
+    reload: (next) => {
+      stop();
+      install(next ? normalizeAccounts(next) : loadAccounts({ home }));
+      start();
+      announce();
+      return list;
+    },
+
+    refresh: (id) => (id
+      ? tick(id)
+      : Promise.all([...slots.keys()].map(refreshOne)).then(() => { announce(); })),
+
+    // A flat reading — the shape this method has always returned — for one
+    // account, the primary by default.
+    get: ({ account, slim } = {}) => {
+      const st = states();
+      const target = account ? list.find((a) => a.id === account) : primaryOf(list, st);
+      if (!target) throw new Error('unknown account');
+      const u = st.get(target.id);
+      return {
+        ...((slim ? slimUsage(u) : u) || NOT_READ),
+        accountId: target.id,
+        accountCount: list.filter((a) => a.enabled).length,
+      };
+    },
+
+    all: (opts = {}) => multiUsage(list, states(), { withMirror: false, ...opts }),
+
+    accounts: () => list.map((a) => {
+      const slot = slots.get(a.id);
+      return {
+        ...a,
+        missing: configDirMissing(a),
+        failKind: (slot && slot.failKind) || null,
+        failStreak: (slot && slot.failStreak) || 0,
+        nextPollMs: backoffFor((slot && slot.failStreak) || 0, USAGE_REFRESH_MS),
+      };
+    }),
   };
 }

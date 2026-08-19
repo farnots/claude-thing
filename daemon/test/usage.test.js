@@ -1,6 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseUsage, describeFailure, reconcileUsage, slimUsage } from '../src/usage.js';
+import {
+  parseUsage, describeFailure, reconcileUsage, slimUsage,
+  slimAccount, primaryOf, orderForWire, multiUsage, classifyFailure, scheduleFor,
+} from '../src/usage.js';
+import { normalizeAccounts, envForAccount } from '../src/usage-accounts.js';
 
 // Verbatim shape of `claude -p "/usage"` output.
 const SAMPLE = `You are currently using your subscription to power your Claude Code usage
@@ -327,4 +331,179 @@ test('slimUsage tolerates the not-read-yet and windowless shapes', () => {
   const slim = slimUsage({ limits: [], error: 'usage not read yet' });
   assert.deepEqual(slim.windows, []);
   assert.equal(slim.error, 'usage not read yet');
+});
+
+// ---- accounts, on the wire ---------------------------------------------------
+
+const acct = (id, over = {}) => ({ id, label: id.toUpperCase(), configDir: null, enabled: true, ...over });
+const withLimits = (used) => parseUsage(`Current session: ${Math.round(used * 100)}% used · resets Aug 1 at 2am`, 1);
+const failed = (msg) => ({ limits: [], stale: true, error: msg });
+
+test('slimAccount carries only what a two-column screen draws', () => {
+  const u = parseUsage(SAMPLE, 7);
+  const a = slimAccount(acct('poly'), u, true);
+  assert.equal(a.id, 'poly');
+  assert.equal(a.label, 'POLY');
+  assert.deepEqual(a.limits, slimUsage(u).limits, 'every bar survives');
+  // A column has no room for the contributing tables, so they are not sent —
+  // and dropping them is what makes two accounts fit one Bluetooth chunk.
+  assert.deepEqual(a.windows, [{ window: 'Last 24h', requests: 579, sessions: 8 }]);
+  assert.equal(a.windows[0].skills, undefined);
+  assert.equal(a.windows[0].subagents, undefined);
+  assert.equal(a.updatedLabel, slimUsage(u).updatedLabel, 'the timestamp is per account');
+});
+
+test('a single account keeps its tables, because the screen still draws them', () => {
+  const u = parseUsage(SAMPLE, 7);
+  const { id, label, ...rest } = slimAccount(acct('only'), u);
+  assert.deepEqual(rest, slimUsage(u), 'nothing is dropped when there is one column');
+  // And the shape the daemon actually sends for one account matches.
+  const out = multiUsage([acct('only')], new Map([['only', u]]), { withMirror: false });
+  assert.ok(out.accounts[0].windows[0].skills.length, 'the contributing tables survive');
+});
+
+test('an account with no reading yet says so rather than looking empty', () => {
+  const a = slimAccount(acct('poly'), null);
+  assert.deepEqual(a.limits, []);
+  assert.equal(a.error, 'usage not read yet');
+});
+
+test('one account produces exactly the pre-accounts shape at the root', () => {
+  const u = parseUsage(SAMPLE, 7);
+  const out = multiUsage([acct('default')], new Map([['default', u]]), { withAccounts: false });
+  const { accountId, accountCount, ...flat } = out;
+  assert.deepEqual(flat, slimUsage(u), 'a device app that predates accounts is unaffected');
+  assert.equal(accountId, 'default');
+  assert.equal(accountCount, 1);
+});
+
+test('the mirror is the primary, and the primary leads the array', () => {
+  const accounts = [acct('a'), acct('b')];
+  const states = new Map([['a', withLimits(0.4)], ['b', withLimits(0.9)]]);
+  const out = multiUsage(accounts, states);
+  assert.equal(out.accountId, 'a');
+  assert.equal(out.limits[0].used, 0.4, 'the flat fields are account a');
+  assert.deepEqual(out.accounts.map((x) => x.id), ['a', 'b']);
+});
+
+test('a broken first account does not become the mirror', () => {
+  // The real case: detection puts the machine default first, and that is the
+  // account most likely to be the misconfigured one. A client reading only the
+  // flat fields must not be handed its error while a good account sits unread.
+  const accounts = [acct('default'), acct('poly')];
+  const states = new Map([
+    ['default', failed('claude /usage failed: Claude configuration file not found')],
+    ['poly', withLimits(0.04)],
+  ]);
+  const out = multiUsage(accounts, states);
+  assert.equal(out.accountId, 'poly');
+  assert.equal(out.limits[0].used, 0.04);
+  assert.equal(out.error, undefined, 'the mirror carries no error at all');
+});
+
+test('a broken account is still listed, with its error and its last figures', () => {
+  const accounts = [acct('default'), acct('poly')];
+  const broken = { ...withLimits(0.4), stale: true, error: 'claude /usage failed: not logged in' };
+  const out = multiUsage(accounts, new Map([['default', broken], ['poly', withLimits(0.04)]]));
+  const listed = out.accounts.find((x) => x.id === 'default');
+  assert.ok(listed, 'dropping it would be indistinguishable from never declaring it');
+  assert.match(listed.error, /not logged in/);
+  assert.equal(listed.limits[0].used, 0.4, 'and its last known figures survive the failure');
+});
+
+test('a disabled account is off the wire entirely', () => {
+  const accounts = [acct('a'), acct('b', { enabled: false })];
+  const out = multiUsage(accounts, new Map([['a', withLimits(0.2)], ['b', withLimits(0.9)]]));
+  assert.equal(out.accountCount, 1);
+  assert.deepEqual(out.accounts.map((x) => x.id), ['a']);
+});
+
+test('a cap trims the array but never the count', () => {
+  const accounts = [acct('a'), acct('b'), acct('c')];
+  const states = new Map(accounts.map((a) => [a.id, withLimits(0.5)]));
+  const out = multiUsage(accounts, states, { cap: 1 });
+  assert.equal(out.accounts.length, 1);
+  assert.equal(out.accountCount, 3, 'so the client knows it is looking at a slice');
+});
+
+test('the response shapes are mirror-or-array, never both', () => {
+  const accounts = [acct('a'), acct('b')];
+  const states = new Map(accounts.map((a) => [a.id, withLimits(0.5)]));
+  const mirrorOnly = multiUsage(accounts, states, { withAccounts: false });
+  assert.equal(mirrorOnly.accounts, undefined);
+  assert.ok(mirrorOnly.limits.length);
+  const arrayOnly = multiUsage(accounts, states, { withMirror: false });
+  assert.equal(arrayOnly.limits, undefined);
+  assert.equal(arrayOnly.accounts.length, 2);
+});
+
+test('primaryOf and orderForWire survive having nothing to go on', () => {
+  assert.equal(primaryOf([], new Map()), null);
+  assert.deepEqual(orderForWire([], new Map()), []);
+  // Nothing enabled is a misconfiguration, not a reason to draw an empty screen.
+  const off = [acct('a', { enabled: false })];
+  assert.equal(primaryOf(off, new Map()).id, 'a');
+  assert.deepEqual(orderForWire(off, new Map()).map((x) => x.id), ['a']);
+  // Nothing read yet: the first enabled account leads.
+  assert.equal(primaryOf([acct('a'), acct('b')], new Map()).id, 'a');
+});
+
+test('structural failures are told apart from transient ones', () => {
+  assert.equal(classifyFailure('Claude configuration file not found at: /x/.claude.json'), 'config');
+  assert.equal(classifyFailure('Invalid API key · Please run /login'), 'auth');
+  assert.equal(classifyFailure('timed out after 45s'), 'timeout');
+  assert.equal(classifyFailure('spawn claude ENOENT'), 'other');
+  assert.equal(classifyFailure(''), 'other');
+});
+
+test('polls are spread across the refresh window, not fired together', () => {
+  assert.deepEqual(scheduleFor([acct('a')], 60_000), [{ id: 'a', delayMs: 0, intervalMs: 60_000 }]);
+  assert.deepEqual(scheduleFor([acct('a'), acct('b')], 60_000), [
+    { id: 'a', delayMs: 0, intervalMs: 60_000 },
+    { id: 'b', delayMs: 30_000, intervalMs: 60_000 },
+  ]);
+  // A disabled account costs no slot, so the rest are not spread thinner for it.
+  assert.deepEqual(
+    scheduleFor([acct('a'), acct('b', { enabled: false })], 60_000).map((s) => s.delayMs), [0]);
+});
+
+// ---- the env is the account --------------------------------------------------
+
+test('a null configDir removes CLAUDE_CONFIG_DIR rather than trusting the env', () => {
+  // The bug this guards: the daemon inherits process.env, so a daemon launched
+  // from a shell that exports CLAUDE_CONFIG_DIR used to measure that shell's
+  // account for every reading. Assigning undefined is not enough — the key would
+  // still reach the child — so the default account has to delete it.
+  const base = { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/Users/x/.claude-poly' };
+  const def = envForAccount({ id: 'default', configDir: null }, base);
+  assert.equal('CLAUDE_CONFIG_DIR' in def, false);
+  assert.equal(def.CLAUDE_CODE_SKIP_PROMPT_HISTORY, '1');
+
+  const poly = envForAccount({ id: 'poly', configDir: '/Users/x/.claude-poly' }, base);
+  assert.equal(poly.CLAUDE_CONFIG_DIR, '/Users/x/.claude-poly');
+  assert.equal(poly.CLAUDE_CODE_SKIP_PROMPT_HISTORY, '1');
+});
+
+test('a declaration is normalized without ever inventing a config dir', () => {
+  const list = normalizeAccounts([
+    { id: 'default', configDir: null },
+    { id: 'Poly Conseil', label: 'polycea', configDir: '/tmp/x' },
+    { id: 'default', configDir: '/tmp/dupe' },
+    { id: '!!!', configDir: '/tmp/y' },
+    { id: 'nope', configDir: 42 },
+    { id: 'off', configDir: null, enabled: false },
+  ]);
+  assert.deepEqual(list.map((a) => a.id), ['default', 'poly-conseil', 'off']);
+  assert.equal(list[0].configDir, null, 'null is never replaced by ~/.claude');
+  assert.equal(list[0].label, 'DEFAULT', 'a missing label falls back to the id');
+  assert.equal(list[1].label, 'POLYCEA');
+  assert.equal(list[2].enabled, false);
+});
+
+test('a declaration that normalizes to nothing falls back to the single account', () => {
+  for (const input of [[], [{ id: '' }], { accounts: [] }, null, 'nonsense']) {
+    assert.deepEqual(normalizeAccounts(input), [
+      { id: 'default', label: 'CLAUDE', configDir: null, enabled: true },
+    ]);
+  }
 });

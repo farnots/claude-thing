@@ -47,7 +47,7 @@ connected clients.
 | `claude.queue.list` | `{}` | `{asks:[Ask]}` — everything waiting on a human, oldest first |
 | `claude.question.answer` | `{id, answers}` — `answers` is `number[][]`, one entry per question of the ask, each the option indices picked for it (`optionIndex` still accepted for a lone single-select question) | `{accepted, viaKeyboard, option, keys?, focused?, reason?}` (see below) |
 | `claude.session.focus` | `{id}` | `{focused, app?, exact?, reason?}` — raises that session's terminal window |
-| `claude.usage.get` | `{slim?}` | `Usage` — full reading by default; `{slim: 1}` returns the device-rendered subset (see the Usage shape), which also keeps this synchronous response inside one Bluetooth chunk |
+| `claude.usage.get` | `{slim?, accounts?, account?}` | `Usage`. Three shapes, because the multi-account reading does not fit one Bluetooth chunk and a synchronous response cannot span them: **`{slim}`** returns the flat mirror of the primary account only — byte for byte what this method returned before accounts existed, so an older device app is unaffected; **`{slim, account:"poly"}`** returns that one account in the same flat shape; **`{slim, accounts:1}`** returns the `accounts` array *without* the mirror. Opting in is what makes the default backwards compatible. `connector`/`emulator` roles are capped at 2 accounts (`BT_SAFE_USAGE_ACCOUNTS`) exactly as `claude.sessions.list` is capped at 4, and when the cap trims the list the daemon follows up with a full `claude.usage.update` push. Without `slim`, the full reading is returned (notes, MCP servers, every window) |
 
 ## Events (daemon → everyone)
 
@@ -59,7 +59,7 @@ connected clients.
 | `claude.permission.resolved` | `{requestId, resolution:"allow"\|"deny"\|"timeout"}` | closes prompt everywhere; terminal-answered too |
 | `claude.question.request` | `Ask` (kind `question`) | a multiple-choice question is on screen in some session |
 | `claude.question.resolved` | `{id, resolution:"answered"\|"timeout"}` | the question is gone, however it was answered |
-| `claude.usage.update` | `Usage` (slim) | pushed once a minute, carrying only the device-rendered subset: no `subscription`, no `notes`, no `mcp`, first window only, top lists capped at 3. `claude.usage.get` returns the full reading |
+| `claude.usage.update` | `Usage` (slim, mirror **and** `accounts`) | one frame per account refresh — with two accounts that is every 30s, since polls are staggered across the refresh window. Carries only the device-rendered subset: no `subscription`, no `notes`, no `mcp`, first window only, top lists capped at 3, and from two accounts on no `skills`/`subagents` either (a column does not draw them). **Never one event per account, and never a per-account topic.** The Mac connector coalesces this topic by name alone (`coalesceKey` in `ClaudeRelayService.swift`), so two frames inside its 200 ms window supersede each other — which is lossless only because every frame is a complete snapshot of every account. Splitting it would need a new `case` in the Swift relay, so a DMG rebuild and a Mac-app update for everyone. `claude.usage.get` returns the full reading |
 | `claude.daemon.status` | `{connected:bool}` | synthesized by relays on daemon link up/down — never sent by the daemon itself |
 
 ## Shapes
@@ -129,6 +129,9 @@ Ask =
 // omits the hero's intent line rather than inventing one
 
 Usage = {
+  // The flat mirror: the primary account, in exactly the shape this had before
+  // accounts existed. Present in the event and in the {slim} response; absent
+  // from a {slim, accounts:1} response, where the array carries everything.
   updatedTs, updatedLabel, subscription?, stale?, error?,
   limits: [{ key, label, used /* 0..1 */, detail /* "resets Jul 30 at 5:19am" */ }],
   windows: [{
@@ -140,7 +143,32 @@ Usage = {
     subagents: [{ name, pct }],
     mcp:       [{ name, pct }],
   }],
+  accountId: string,        // which account the mirror above speaks for
+  accountCount: number,     // how many are declared and enabled, so a client
+                            // knows when it is looking at a capped slice.
+                            // 1 on a single-account Mac, which is the value the
+                            // connector coerces to `true` — hence its entry in
+                            // the device's NUMERIC table (numbers.js)
+  accounts?: [UsageAccount],
 }
+
+UsageAccount = Usage's mirror fields, per account, plus:
+{
+  id: string,      // stable slug, /^[a-z0-9][a-z0-9-]{0,15}$/. The key {account}
+                   // addresses and the key the reading is persisted under. Never
+                   // derived from the email, which changes
+  label: string,   // <=12 chars, what the device draws as the column header
+}
+// From two accounts on, each entry's window carries only {window, requests,
+// sessions}: the screen is two columns then, and a column has no room for the
+// contributing tables. Sending them is ~330 bytes per account of an 1800-byte
+// chunk spent on rows nobody renders, and dropping them is the difference
+// between two accounts fitting one synchronous response (1449 bytes worst case)
+// and not (2101). A single account keeps the full layout, so nothing is dropped.
+//
+// A failing account is never dropped from the array — it appears with its
+// `error`, its last known limits and `stale: true`. An absent account would be
+// indistinguishable from one that was never declared.
 ```
 
 ## Answering questions is not symmetric with permissions
@@ -224,6 +252,45 @@ contributing" breakdown. It performs no inference (zero model tokens) and with
 `CLAUDE_CODE_SKIP_PROMPT_HISTORY=1` writes no transcript, so the daemon polls it
 once a minute and parses the text. Nothing is estimated and no denominator is
 invented.
+
+### An account is a `CLAUDE_CONFIG_DIR`, or the absence of one
+
+There is no account name or token the daemon can see. Which account `/usage`
+reports is decided entirely by `CLAUDE_CONFIG_DIR` in the poll's environment, so
+that variable *is* the account — and **its absence is a distinct account, not a
+synonym for `~/.claude`**. Claude Code resolves its state to
+`$CLAUDE_CONFIG_DIR/.claude.json` when the variable is set and to
+`$HOME/.claude.json` when it is not, and a machine whose real account lives in
+the legacy `$HOME/.claude.json` answers correctly with the variable unset and
+fails with `Claude configuration file not found` the moment something sets it to
+`~/.claude`. `configDir: null` means that case, and the poll must `delete` the
+key rather than assign `undefined` — assigning it still passes the key to the
+child. This also fixes a bug that predates accounts: the poll inherited
+`process.env`, so the screen reported whichever account the shell that launched
+the daemon happened to be in, with nothing on screen saying so.
+
+Accounts are declared in `${STATE_DIR}/usage-accounts.json` (`daemon/src/usage-accounts.js`),
+detected once on first run and stable thereafter. Detection accepts a candidate
+only if its `.claude.json` carries `oauthAccount.emailAddress`, which is what
+tells a signed-in config from the stub `~/.claude/.claude.json` a legacy layout
+leaves behind — no directory needs special-casing. `GET`/`POST /api/usage/accounts`
+edit the list from the control page; a re-detect merges rather than replaces, so
+a renamed label and a disabled account survive it.
+
+Each account has its own reading, its own anti-flap state (`reconcileUsage`'s
+`lowSeen` rides on the limits of that account's reading) and its own persisted
+figure, so an account that is signed out or misconfigured can never blank the
+screen for the rest. Two further consequences worth knowing:
+
+- **Polls are staggered**, not parallel or sequential: a run takes 20-45s, so two
+  back to back would overrun the 60s window, while firing them together doubles
+  the number of concurrent `claude` processes rewriting the session registry the
+  poller reads. Account *i* of *n* starts at `i × (60s / n)`.
+- **A structurally failing account backs off** to 15 minutes after three
+  consecutive `config`/`auth` failures, and a missing config dir is never polled
+  at all. Otherwise a signed-out account spends a 45s `claude` boot every minute
+  on a foregone conclusion. Timeouts are transient and never back off; one good
+  reading restores the nominal interval.
 
 State machine (daemon-side): `busy` while tool/response activity within 10 s;
 `attention` when pending permission or waiting for user input; `celebrate` for
